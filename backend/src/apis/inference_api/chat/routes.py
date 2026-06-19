@@ -7,6 +7,7 @@ Implements AgentCore Runtime required endpoints:
 These endpoints are at the root level to comply with AWS Bedrock AgentCore Runtime requirements.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -59,6 +60,37 @@ def is_preview_session(session_id: str) -> bool:
     They allow full agent functionality but don't save to user's conversation history.
     """
     return session_id.startswith(PREVIEW_SESSION_PREFIX)
+
+
+async def _resolve_endpoint_config(
+    model_id: str | None,
+    explicit_provider: str | None,
+) -> tuple[str | None, str | None, dict | None, str | None]:
+    """
+    Look up a managed model's endpoint URL, API key, extra headers, and provider.
+
+    Returns (endpoint_url, api_key, extra_headers, provider) where api_key is
+    already resolved from the env var named in api_key_env_var.  Returns
+    (None, None, None, explicit_provider) when the model is not in the registry
+    or has no endpoint configured.
+    """
+    if not model_id:
+        return None, None, None, explicit_provider
+    try:
+        managed_models = await list_managed_models()
+        for m in managed_models:
+            if m.model_id == model_id:
+                endpoint_url = m.endpoint_url or None
+                api_key: str | None = None
+                if m.api_key_env_var:
+                    api_key = os.environ.get(m.api_key_env_var) or None
+                extra_headers = m.extra_headers or None
+                # Use the provider stored in the managed model if caller didn't specify
+                resolved_provider = explicit_provider or m.provider or None
+                return endpoint_url, api_key, extra_headers, resolved_provider
+    except Exception:
+        logger.warning("Failed to resolve endpoint config for model %s", model_id)
+    return None, None, None, explicit_provider
 
 
 async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
@@ -509,17 +541,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.info("Preview session - skipping assistant_id persistence")
 
     try:
-        # Resolve caching_enabled based on managed model configuration
-        # This allows admins to disable caching for models that don't support it
-        caching_enabled = await _resolve_caching_enabled(model_id=input_data.model_id, explicit_caching_enabled=input_data.caching_enabled)
+        # Resolve caching_enabled and endpoint config from managed model registry
+        caching_enabled, (endpoint_url, api_key, extra_headers, resolved_provider) = await asyncio.gather(
+            _resolve_caching_enabled(
+                model_id=input_data.model_id,
+                explicit_caching_enabled=input_data.caching_enabled,
+            ),
+            _resolve_endpoint_config(
+                model_id=input_data.model_id,
+                explicit_provider=input_data.provider,
+            ),
+        )
 
         if caching_enabled is False:
             logger.info("Prompt caching disabled for model")
+        if endpoint_url:
+            logger.info("Custom endpoint resolved for model %s: %s", input_data.model_id, endpoint_url)
 
-        # Get agent instance with user-specific configuration
-        # AgentCore Memory tracks preferences across sessions per user_id
-        # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
-        # Use augmented message and assistant system prompt if assistant RAG was applied
         agent = get_agent(
             session_id=input_data.session_id,
             user_id=user_id,
@@ -527,10 +565,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             enabled_tools=input_data.enabled_tools,
             model_id=input_data.model_id,
             temperature=input_data.temperature,
-            system_prompt=system_prompt,  # Use assistant's instructions if available
+            system_prompt=system_prompt,
             caching_enabled=caching_enabled,
-            provider=input_data.provider,
+            provider=resolved_provider,
             max_tokens=input_data.max_tokens,
+            endpoint_url=endpoint_url,
+            api_key=api_key,
+            extra_headers=extra_headers,
         )
 
         # Build citations list for persistence (convert context chunks to citation format)

@@ -61,6 +61,9 @@ class MainAgent:
         provider: Optional[str] = None,
         max_tokens: Optional[int] = None,
         skip_persistence: bool = False,
+        endpoint_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        extra_headers: Optional[dict] = None,
     ):
         """
         Initialize Main Agent with modular architecture and multi-provider support
@@ -71,16 +74,15 @@ class MainAgent:
             auth_token: Raw OIDC token for forwarding to external MCP tools (optional)
             enabled_tools: List of tool IDs to enable. If None, all tools are enabled.
             model_id: Model ID to use (format depends on provider)
-                - Bedrock: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-                - OpenAI: "gpt-4o", "gpt-4o-mini", "o1-preview"
-                - Gemini: "gemini-2.5-flash", "gemini-2.5-pro"
             temperature: Model temperature (0.0 - 1.0)
             system_prompt: System prompt text
             caching_enabled: Whether to enable prompt caching (Bedrock only)
-            provider: LLM provider ("bedrock", "openai", or "gemini"). If not specified,
-                     will auto-detect from model_id
+            provider: LLM provider string. If not specified, auto-detected from model_id.
             max_tokens: Maximum tokens to generate (optional)
             skip_persistence: If True, don't persist messages (for preview sessions)
+            endpoint_url: Custom base URL for OpenAI-compatible providers
+            api_key: Resolved API key for the endpoint
+            extra_headers: Additional HTTP headers (e.g. APIM subscription key)
         """
         # Basic state
         self.session_id = session_id
@@ -91,7 +93,14 @@ class MainAgent:
 
         # Initialize model configuration
         self.model_config = ModelConfig.from_params(
-            model_id=model_id, temperature=temperature, caching_enabled=caching_enabled, provider=provider, max_tokens=max_tokens
+            model_id=model_id,
+            temperature=temperature,
+            caching_enabled=caching_enabled,
+            provider=provider,
+            max_tokens=max_tokens,
+            endpoint_url=endpoint_url,
+            api_key=api_key,
+            extra_headers=extra_headers,
         )
 
         # Load retry configuration from environment variables

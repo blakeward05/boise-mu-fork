@@ -3,7 +3,7 @@ import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft } from '@ng-icons/heroicons/outline';
-import { AVAILABLE_PROVIDERS, ManagedModelFormData, ModelProvider } from './models/managed-model.model';
+import { AVAILABLE_PROVIDERS, PROVIDER_LABELS, ManagedModelFormData, ModelProvider } from './models/managed-model.model';
 import { ManagedModelsService } from './services/managed-models.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
 
@@ -12,6 +12,8 @@ interface ModelFormGroup {
   modelName: FormControl<string>;
   provider: FormControl<ModelProvider>;
   providerName: FormControl<string>;
+  endpointUrl: FormControl<string | null>;
+  apiKeyEnvVar: FormControl<string | null>;
   inputModalities: FormControl<string[]>;
   outputModalities: FormControl<string[]>;
   maxInputTokens: FormControl<number>;
@@ -46,7 +48,13 @@ export class ModelFormPage implements OnInit {
 
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
+  readonly providerLabels = PROVIDER_LABELS;
   readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'EMBEDDING'];
+
+  /** True when the selected provider needs an explicit endpoint URL. */
+  get showEndpointFields(): boolean {
+    return this.modelForm.controls.provider.value !== 'bedrock';
+  }
 
   // AppRoles from the API (reactive resource)
   readonly rolesResource = this.appRolesService.rolesResource;
@@ -61,8 +69,10 @@ export class ModelFormPage implements OnInit {
   readonly modelForm: FormGroup<ModelFormGroup> = this.fb.group({
     modelId: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     modelName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
-    provider: this.fb.control<ModelProvider>('bedrock', { nonNullable: true, validators: [Validators.required] }),
+    provider: this.fb.control<ModelProvider>('openai-compatible', { nonNullable: true, validators: [Validators.required] }),
     providerName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
+    endpointUrl: this.fb.control<string | null>(null),
+    apiKeyEnvVar: this.fb.control<string | null>(null),
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     outputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     maxInputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
@@ -125,6 +135,8 @@ export class ModelFormPage implements OnInit {
         outputModalities: model.outputModalities.map(m => m.toUpperCase()),
         maxInputTokens: model.maxInputTokens,
         maxOutputTokens: model.maxOutputTokens,
+        endpointUrl: model.endpointUrl ?? null,
+        apiKeyEnvVar: model.apiKeyEnvVar ?? null,
         allowedAppRoles: model.allowedAppRoles ?? [],
         availableToRoles: model.availableToRoles ?? [],
         enabled: model.enabled,

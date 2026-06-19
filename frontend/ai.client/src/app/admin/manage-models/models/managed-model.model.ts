@@ -1,12 +1,40 @@
 /**
  * Available model providers.
  */
-export type ModelProvider = 'bedrock' | 'openai' | 'gemini';
+export type ModelProvider =
+  | 'bedrock'
+  | 'openai'
+  | 'openai-compatible'
+  | 'gemini'
+  | 'databricks'
+  | 'azure-ai-foundry'
+  | 'azure-apim';
 
 /**
- * Available model providers as a constant array.
+ * Available model providers as a constant array (most useful first for local-first setup).
  */
-export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini'];
+export const AVAILABLE_PROVIDERS: ModelProvider[] = [
+  'openai-compatible',
+  'openai',
+  'bedrock',
+  'gemini',
+  'databricks',
+  'azure-ai-foundry',
+  'azure-apim',
+];
+
+/**
+ * Human-readable labels for each provider.
+ */
+export const PROVIDER_LABELS: Record<ModelProvider, string> = {
+  'openai-compatible': 'OpenAI Compatible (Ollama, vLLM, LM Studio…)',
+  'openai': 'OpenAI',
+  'bedrock': 'AWS Bedrock',
+  'gemini': 'Google Gemini',
+  'databricks': 'Databricks',
+  'azure-ai-foundry': 'Azure AI Foundry',
+  'azure-apim': 'Azure APIM',
+};
 
 /**
  * Represents a managed model in the system.
@@ -58,6 +86,10 @@ export interface ManagedModel {
   supportsCaching: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /** Endpoint URL for OpenAI-compatible providers (Ollama, vLLM, Databricks, Azure, etc.) */
+  endpointUrl?: string | null;
+  /** Environment variable name holding the API key for this provider */
+  apiKeyEnvVar?: string | null;
   /** Date the model was added to the system (ISO string from API) */
   createdAt?: string | Date;
   /** Date the model was last updated (ISO string from API) */
@@ -110,6 +142,10 @@ export interface ManagedModelFormData {
   supportsCaching?: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /** Endpoint URL for OpenAI-compatible providers */
+  endpointUrl?: string | null;
+  /** Environment variable name holding the API key */
+  apiKeyEnvVar?: string | null;
 }
 
 /**

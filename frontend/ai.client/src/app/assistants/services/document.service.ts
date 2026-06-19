@@ -82,7 +82,7 @@ export class DocumentService {
    * @returns Promise that resolves when upload completes
    * @throws DocumentUploadError on upload failure
    */
-  async uploadToS3(
+  async uploadToStorage(
     presignedUrl: string,
     file: File,
     onProgress: (progress: number) => void,

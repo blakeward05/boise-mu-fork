@@ -8,7 +8,7 @@ import logging
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from apis.shared.auth import User, get_current_user
@@ -102,6 +102,43 @@ async def request_presigned_url(
                 required_space=e.required_space,
             ).model_dump(by_alias=True),
         )
+
+
+@router.put("/{upload_id}/content", status_code=status.HTTP_204_NO_CONTENT)
+async def upload_file_content(
+    upload_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Receive raw file bytes for a pending upload (local storage only).
+
+    Used when LocalFileStorage is active: the presign endpoint returns a URL
+    pointing here instead of an S3 presigned URL. The client PUTs the file
+    body directly. After this call succeeds, the client should still call
+    POST /{upload_id}/complete to mark the upload as ready.
+    """
+    from apis.shared.storage import get_file_storage
+
+    file_meta = await service.get_file(user.user_id, upload_id)
+    if not file_meta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload {upload_id} not found",
+        )
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request body is empty",
+        )
+
+    storage = get_file_storage()
+    await storage.write(file_meta.storage_key, data)
+    logger.info("Received %d bytes for upload %s", len(data), upload_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{upload_id}/complete", response_model=CompleteUploadResponse)

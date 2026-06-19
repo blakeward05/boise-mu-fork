@@ -1,132 +1,87 @@
-"""DynamoDB repository for API keys.
+"""MongoDB repository for API key management."""
 
-Table schema:
-    PK: USER#<user_id>
-    SK: KEY#<key_id>
-
-    GSI: KeyHashIndex
-        keyHash (partition key, no sort key — each hash is unique)
-        Projection: ALL
-
-Attributes:
-    keyId, userId, name, keyHash, keyPrefix,
-    createdAt, expiresAt, lastUsedAt
-"""
-
-import hashlib
 import logging
-import os
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
 
-import boto3
-from boto3.dynamodb.conditions import Key
-from botocore.exceptions import ClientError
+from apis.shared.database import get_database, BaseRepository, Collections
 
 logger = logging.getLogger(__name__)
 
+_repository: Optional["ApiKeyRepository"] = None
 
-class ApiKeyRepository:
-    """DynamoDB repository for API key CRUD operations."""
 
-    def __init__(self):
-        self.dynamodb = boto3.resource("dynamodb")
-        self.table_name = os.environ.get(
-            "DYNAMODB_API_KEYS_TABLE_NAME", "ApiKeys"
-        )
-        self.table = self.dynamodb.Table(self.table_name)
+def get_api_key_repository() -> "ApiKeyRepository":
+    global _repository
+    if _repository is None:
+        _repository = ApiKeyRepository()
+    return _repository
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
 
-    @staticmethod
-    def hash_key(raw_key: str) -> str:
-        """SHA-256 hash of the raw API key for secure storage."""
-        return hashlib.sha256(raw_key.encode()).hexdigest()
+class ApiKeyRepository(BaseRepository):
+    """MongoDB repository for API keys.
 
-    # ------------------------------------------------------------------
-    # Write
-    # ------------------------------------------------------------------
+    Document schema (_id = key_id):
+        _id:          key_id
+        user_id:      owner user ID
+        name:         human label
+        key_hash:     SHA-256 hex of the raw key (for lookup)
+        key_prefix:   first 8 chars of raw key (displayed to user)
+        created_at:   ISO timestamp
+        expires_at:   ISO timestamp or None
+        last_used_at: ISO timestamp or None
+        enabled:      bool
+    """
+
+    def __init__(self) -> None:
+        super().__init__(get_database(), Collections.API_KEYS)
 
     async def create_key(self, item: Dict[str, Any]) -> None:
-        """Put a new API key item into the table."""
-        try:
-            self.table.put_item(
-                Item=item,
-                ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            )
-        except ClientError as e:
-            logger.error(f"Failed to create API key: {e}")
-            raise
-
-    async def delete_key(self, user_id: str, key_id: str) -> bool:
-        """Delete an API key. Returns True if deleted."""
-        try:
-            self.table.delete_item(
-                Key={"PK": f"USER#{user_id}", "SK": f"KEY#{key_id}"},
-                ConditionExpression="attribute_exists(PK)",
-            )
-            return True
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                return False
-            logger.error(f"Failed to delete API key {key_id}: {e}")
-            raise
-
-    async def update_last_used(self, user_id: str, key_id: str) -> None:
-        """Stamp lastUsedAt on a key after successful validation."""
-        try:
-            self.table.update_item(
-                Key={"PK": f"USER#{user_id}", "SK": f"KEY#{key_id}"},
-                UpdateExpression="SET lastUsedAt = :ts",
-                ExpressionAttributeValues={
-                    ":ts": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-        except ClientError as e:
-            # Non-critical — log and move on
-            logger.warning(f"Failed to update lastUsedAt for key {key_id}: {e}")
-
-    # ------------------------------------------------------------------
-    # Read
-    # ------------------------------------------------------------------
+        doc = {
+            "_id": item["keyId"],
+            "user_id": item["userId"],
+            "name": item.get("name", ""),
+            "key_hash": item["keyHash"],
+            "key_prefix": item.get("keyPrefix", ""),
+            "created_at": item.get("createdAt", datetime.now(timezone.utc).isoformat()),
+            "expires_at": item.get("expiresAt"),
+            "last_used_at": item.get("lastUsedAt"),
+            "enabled": True,
+        }
+        await self._insert_one(doc)
+        logger.info("Created API key %s for user %s", item["keyId"], item["userId"])
 
     async def get_key(self, user_id: str, key_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a single key item by user_id + key_id."""
-        resp = self.table.get_item(
-            Key={"PK": f"USER#{user_id}", "SK": f"KEY#{key_id}"}
-        )
-        return resp.get("Item")
+        doc = await self._find_one({"_id": key_id, "user_id": user_id})
+        return self._doc_to_item(doc) if doc else None
 
     async def get_key_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get the API key belonging to a user (one key per user)."""
-        resp = self.table.query(
-            KeyConditionExpression=Key("PK").eq(f"USER#{user_id}"),
-            Limit=1,
-        )
-        items = resp.get("Items", [])
-        return items[0] if items else None
+        doc = await self._find_one({"user_id": user_id, "enabled": True})
+        return self._doc_to_item(doc) if doc else None
 
     async def get_key_by_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
-        """Look up a key by its hash via the KeyHashIndex GSI."""
-        resp = self.table.query(
-            IndexName="KeyHashIndex",
-            KeyConditionExpression=Key("keyHash").eq(key_hash),
-            Limit=1,
+        doc = await self._find_one({"key_hash": key_hash, "enabled": True})
+        return self._doc_to_item(doc) if doc else None
+
+    async def delete_key(self, user_id: str, key_id: str) -> bool:
+        count = await self._delete_one({"_id": key_id, "user_id": user_id})
+        return count > 0
+
+    async def update_last_used(self, user_id: str, key_id: str) -> None:
+        await self._update_one(
+            {"_id": key_id, "user_id": user_id},
+            {"$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
         )
-        items = resp.get("Items", [])
-        return items[0] if items else None
 
-# ---------------------------------------------------------------------------
-# Singleton
-# ---------------------------------------------------------------------------
-
-_repo: Optional[ApiKeyRepository] = None
-
-
-def get_api_key_repository() -> ApiKeyRepository:
-    global _repo
-    if _repo is None:
-        _repo = ApiKeyRepository()
-    return _repo
+    @staticmethod
+    def _doc_to_item(doc: dict) -> Dict[str, Any]:
+        return {
+            "keyId": doc["_id"],
+            "userId": doc["user_id"],
+            "name": doc.get("name", ""),
+            "keyHash": doc.get("key_hash", ""),
+            "keyPrefix": doc.get("key_prefix", ""),
+            "createdAt": doc.get("created_at", ""),
+            "expiresAt": doc.get("expires_at"),
+            "lastUsedAt": doc.get("last_used_at"),
+        }

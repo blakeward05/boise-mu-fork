@@ -32,24 +32,28 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== AgentCore Public Stack API Starting ===")
-    logger.info("Agent execution engine initialized")
 
-    # Create output directories if they don't exist
+    # MongoDB connection + indexes (when DATABASE_URL is set)
+    if os.environ.get("DATABASE_URL"):
+        from apis.shared.database import init_connection, close_connection as _close_db
+        from apis.shared.database.indexes import ensure_indexes
+        await init_connection()
+        await ensure_indexes()
+        app.state.close_db = _close_db
+        logger.info("MongoDB connected and indexes ensured")
+
+    # Create output directories
     base_dir = Path(__file__).parent.parent
-    output_dir = os.path.join(base_dir, "output")
-    uploads_dir = os.path.join(base_dir, "uploads")
-    generated_images_dir = os.path.join(base_dir, "generated_images")
-
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(uploads_dir, exist_ok=True)
-    os.makedirs(generated_images_dir, exist_ok=True)
+    for subdir in ("output", "uploads", "generated_images"):
+        os.makedirs(os.path.join(base_dir, subdir), exist_ok=True)
     logger.info("Output directories ready")
 
-    yield  # Application is running
+    yield
 
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
-    # TODO: Cleanup agent pool, MCP clients, etc.
+    if os.environ.get("DATABASE_URL") and hasattr(app.state, "close_db"):
+        await app.state.close_db()
 
 # Create FastAPI app with lifespan
 app = FastAPI(
@@ -73,6 +77,7 @@ app.add_middleware(
 # Import routers
 from apis.app_api.health import router as health_router
 from apis.app_api.auth.routes import router as auth_router
+from apis.app_api.auth.local_routes import router as local_auth_router
 from apis.app_api.auth.api_keys.routes import router as api_keys_router
 from apis.app_api.sessions.routes import router as sessions_router
 from apis.app_api.admin.routes import router as admin_router
@@ -94,6 +99,7 @@ from apis.app_api.shares.routes import conversations_share_router, shares_router
 # Include routers
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(local_auth_router)
 app.include_router(api_keys_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)

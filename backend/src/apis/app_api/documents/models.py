@@ -9,29 +9,23 @@ DocumentStatus = Literal["uploading", "chunking", "embedding", "complete", "fail
 
 
 class Document(BaseModel):
-    """
-    Complete document model (internal use)
-    Stored in DynamoDB using adjacency list pattern:
-    PK: AST#{assistant_id}
-    SK: DOC#{document_id}
-    """
+    """Complete document model (internal use). Stored in MongoDB assistant_documents collection."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    document_id: str = Field(..., alias="documentId", description="Document identifier")
-    assistant_id: str = Field(..., alias="assistantId", description="Parent assistant identifier")
-    filename: str = Field(..., description="Original filename")
-    content_type: str = Field(..., alias="contentType", description="MIME type")
-    size_bytes: int = Field(..., alias="sizeBytes", description="File size in bytes")
-    s3_key: str = Field(..., alias="s3Key", description="S3 object key")
-    vector_store_id: Optional[str] = Field(None, alias="vectorStoreId", description="S3 vector store identifier")
-    status: DocumentStatus = Field(..., description="Processing status")
-    error_message: Optional[str] = Field(None, alias="errorMessage", description="User-friendly error message for UI display")
-    error_details: Optional[str] = Field(None, alias="errorDetails", description="Technical error details for debugging")
-    chunk_count: Optional[int] = Field(None, alias="chunkCount", description="Number of chunks created")
-    created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
-    updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")
-    ttl: Optional[int] = Field(None, alias="ttl", description="DynamoDB TTL epoch timestamp for auto-expiry")
+    document_id: str = Field(..., alias="documentId")
+    assistant_id: str = Field(..., alias="assistantId")
+    filename: str = Field(...)
+    content_type: str = Field(..., alias="contentType")
+    size_bytes: int = Field(..., alias="sizeBytes")
+    s3_key: str = Field(..., alias="storageKey", description="Storage path (filesystem or blob key)")
+    vector_store_id: Optional[str] = Field(None, alias="vectorStoreId", description="Vector store backend identifier")
+    status: DocumentStatus = Field(...)
+    error_message: Optional[str] = Field(None, alias="errorMessage")
+    error_details: Optional[str] = Field(None, alias="errorDetails")
+    chunk_count: Optional[int] = Field(None, alias="chunkCount")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: str = Field(..., alias="updatedAt")
 
 
 class CreateDocumentRequest(BaseModel):

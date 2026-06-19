@@ -1,12 +1,14 @@
-import { Component, signal, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component, signal, computed, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core';
+import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../auth.service';
+import { UserService } from '../user.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
+import { SessionService } from '../../session/services/session/session.service';
 
 interface AuthProviderPublicInfo {
   provider_id: string;
@@ -21,7 +23,7 @@ interface AuthProviderPublicListResponse {
 
 @Component({
   selector: 'app-login',
-  imports: [CommonModule],
+  imports: [ReactiveFormsModule],
   styleUrl: './login.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -56,45 +58,100 @@ interface AuthProviderPublicListResponse {
                   <svg class="size-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p class="text-sm text-red-800 dark:text-red-300">
-                    {{ errorMessage() }}
-                  </p>
+                  <p class="text-sm text-red-800 dark:text-red-300">{{ errorMessage() }}</p>
                 </div>
               </div>
             }
 
-            <!-- Login buttons -->
-            <div class="w-full flex flex-col gap-3">
-              <!-- Primary Cognito login button -->
-              <button
-                type="button"
-                (click)="handleCognitoLogin()"
-                [disabled]="isLoading()"
-                class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
-              >
-                @if (isLoading() && !activeProviderId()) {
-                  <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Connecting...</span>
-                } @else {
-                  <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                  <span>Sign in with Cognito</span>
-                }
-              </button>
+            <!-- Local login form -->
+            @if (showLocalForm()) {
+              <form [formGroup]="localForm" (ngSubmit)="handleLocalLogin()" class="w-full flex flex-col gap-4" novalidate>
+                <div>
+                  <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                  <input
+                    id="email"
+                    type="email"
+                    formControlName="email"
+                    autocomplete="email"
+                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="you@example.com"
+                    [attr.aria-invalid]="localForm.get('email')?.invalid && localForm.get('email')?.touched"
+                  />
+                  @if (localForm.get('email')?.touched && localForm.get('email')?.errors?.['required']) {
+                    <p class="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">Email is required</p>
+                  }
+                  @if (localForm.get('email')?.touched && localForm.get('email')?.errors?.['email']) {
+                    <p class="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">Enter a valid email address</p>
+                  }
+                </div>
 
-              <!-- Federated providers section -->
-              @if (providers().length > 0) {
-                <!-- Divider -->
-                <div class="relative my-2">
-                  <div class="absolute inset-0 flex items-center">
+                <div>
+                  <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+                  <input
+                    id="password"
+                    type="password"
+                    formControlName="password"
+                    autocomplete="current-password"
+                    class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"
+                    [attr.aria-invalid]="localForm.get('password')?.invalid && localForm.get('password')?.touched"
+                  />
+                  @if (localForm.get('password')?.touched && localForm.get('password')?.errors?.['required']) {
+                    <p class="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">Password is required</p>
+                  }
+                </div>
+
+                <button
+                  type="submit"
+                  [disabled]="isLoading() || localForm.invalid"
+                  class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  @if (isLoading() && localLoginActive()) {
+                    <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
+                    <span>Signing in...</span>
+                  } @else {
+                    <span>Sign In</span>
+                  }
+                </button>
+              </form>
+            }
+
+            <!-- SSO section -->
+            @if (showSsoSection()) {
+              <!-- Divider between local form and SSO -->
+              @if (showLocalForm()) {
+                <div class="relative w-full">
+                  <div class="absolute inset-0 flex items-center" aria-hidden="true">
                     <div class="w-full border-t border-gray-200 dark:border-gray-700"></div>
                   </div>
                   <div class="relative flex justify-center text-xs">
                     <span class="bg-white dark:bg-gray-800 px-2 text-gray-500 dark:text-gray-400">or continue with</span>
                   </div>
                 </div>
+              }
 
+              <div class="w-full flex flex-col gap-3">
+                <!-- Primary OIDC SSO button -->
+                @if (authService.isOidcConfigured()) {
+                  <button
+                    type="button"
+                    (click)="handleSsoLogin()"
+                    [disabled]="isLoading()"
+                    class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    @if (isLoading() && !localLoginActive() && !activeProviderId()) {
+                      <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
+                      <span>Connecting...</span>
+                    } @else {
+                      <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                      <span>Sign in with SSO</span>
+                    }
+                  </button>
+                }
+
+                <!-- Federated providers from admin-configured list -->
                 @for (provider of providers(); track provider.provider_id) {
                   <button
                     type="button"
@@ -102,10 +159,9 @@ interface AuthProviderPublicListResponse {
                     [disabled]="isLoading()"
                     class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 disabled:opacity-60"
                     [style.background-color]="provider.button_color || '#2563eb'"
-                    [style.--hover-bg]="provider.button_color ? adjustBrightness(provider.button_color, -15) : '#1d4ed8'"
                   >
                     @if (isLoading() && activeProviderId() === provider.provider_id) {
-                      <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
                       <span>Connecting...</span>
                     } @else {
                       @if (provider.logo_url) {
@@ -119,21 +175,23 @@ interface AuthProviderPublicListResponse {
                     }
                   </button>
                 }
-              }
 
-              <!-- Loading spinner for federated providers -->
-              @if (providersLoading()) {
-                <div class="flex justify-center py-2">
-                  <div class="size-5 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" role="status">
-                    <span class="sr-only">Loading federated providers</span>
+                @if (providersLoading()) {
+                  <div class="flex justify-center py-2">
+                    <div class="size-5 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" role="status">
+                      <span class="sr-only">Loading providers</span>
+                    </div>
                   </div>
-                </div>
-              }
-            </div>
+                }
+              </div>
+            }
 
-            <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
-              You will be redirected to complete authentication
-            </p>
+            <!-- Neither mode is configured -->
+            @if (!showLocalForm() && !showSsoSection() && !providersLoading()) {
+              <p class="text-sm text-gray-500 dark:text-gray-400 text-center">
+                No authentication method is configured. Set <code class="font-mono">LOCAL_AUTH_ENABLED=true</code> or configure an OIDC provider.
+              </p>
+            }
           </div>
         </div>
       </div>
@@ -141,19 +199,33 @@ interface AuthProviderPublicListResponse {
   `
 })
 export class LoginPage implements OnInit, OnDestroy {
-  private authService = inject(AuthService);
-  private sidenavService = inject(SidenavService);
-  private config = inject(ConfigService);
-  private http = inject(HttpClient);
-  private route = inject(ActivatedRoute);
-  private router = inject(Router);
-  private systemService = inject(SystemService);
+  protected readonly authService = inject(AuthService);
+  private readonly userService = inject(UserService);
+  private readonly sidenavService = inject(SidenavService);
+  private readonly config = inject(ConfigService);
+  private readonly http = inject(HttpClient);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly systemService = inject(SystemService);
+  private readonly sessionService = inject(SessionService);
+  private readonly fb = inject(FormBuilder);
 
-  isLoading = signal(false);
-  errorMessage = signal<string | null>(null);
-  providers = signal<AuthProviderPublicInfo[]>([]);
-  providersLoading = signal(true);
-  activeProviderId = signal<string | null>(null);
+  readonly localForm = this.fb.group({
+    email: ['', [Validators.required, Validators.email]],
+    password: ['', [Validators.required]],
+  });
+
+  readonly isLoading = signal(false);
+  readonly errorMessage = signal<string | null>(null);
+  readonly providers = signal<AuthProviderPublicInfo[]>([]);
+  readonly providersLoading = signal(true);
+  readonly activeProviderId = signal<string | null>(null);
+  readonly localLoginActive = signal(false);
+
+  readonly showLocalForm = computed(() => this.authService.isLocalAuthEnabled());
+  readonly showSsoSection = computed(
+    () => this.authService.isOidcConfigured() || this.providers().length > 0
+  );
 
   ngOnInit(): void {
     this.sidenavService.hide();
@@ -172,7 +244,7 @@ export class LoginPage implements OnInit, OnDestroy {
         this.router.navigate(['/auth/first-boot']);
       }
     } catch {
-      // If status check fails, stay on login page
+      // stay on login page if status check fails
     }
   }
 
@@ -182,18 +254,40 @@ export class LoginPage implements OnInit, OnDestroy {
       const response = await firstValueFrom(
         this.http.get<AuthProviderPublicListResponse>(url)
       );
-
       this.providers.set(response?.providers ?? []);
-    } catch (error) {
-      // Federated providers failed to load — Cognito button still works
+    } catch {
       this.providers.set([]);
     } finally {
       this.providersLoading.set(false);
     }
   }
 
-  async handleCognitoLogin(): Promise<void> {
+  async handleLocalLogin(): Promise<void> {
+    if (this.localForm.invalid || this.isLoading()) return;
+
     this.isLoading.set(true);
+    this.localLoginActive.set(true);
+    this.errorMessage.set(null);
+
+    const { email, password } = this.localForm.value;
+
+    try {
+      await this.authService.localLogin(email!, password!);
+      this.userService.refreshUser();
+      await this.userService.ensurePermissionsLoaded();
+      this.sessionService.enableSessionsLoading();
+      this.navigateAfterLogin();
+    } catch (error) {
+      this.errorMessage.set(error instanceof Error ? error.message : 'Sign in failed. Please try again.');
+    } finally {
+      this.isLoading.set(false);
+      this.localLoginActive.set(false);
+    }
+  }
+
+  async handleSsoLogin(): Promise<void> {
+    this.isLoading.set(true);
+    this.localLoginActive.set(false);
     this.activeProviderId.set(null);
     this.errorMessage.set(null);
 
@@ -202,13 +296,13 @@ export class LoginPage implements OnInit, OnDestroy {
       await this.authService.login();
     } catch (error) {
       this.isLoading.set(false);
-      const errorMsg = error instanceof Error ? error.message : 'An error occurred during login';
-      this.errorMessage.set(errorMsg);
+      this.errorMessage.set(error instanceof Error ? error.message : 'An error occurred during sign in');
     }
   }
 
   async handleProviderLogin(provider: AuthProviderPublicInfo): Promise<void> {
     this.isLoading.set(true);
+    this.localLoginActive.set(false);
     this.activeProviderId.set(provider.provider_id);
     this.errorMessage.set(null);
 
@@ -218,20 +312,14 @@ export class LoginPage implements OnInit, OnDestroy {
     } catch (error) {
       this.isLoading.set(false);
       this.activeProviderId.set(null);
-      const errorMsg = error instanceof Error ? error.message : 'An error occurred during login';
-      this.errorMessage.set(errorMsg);
+      this.errorMessage.set(error instanceof Error ? error.message : 'An error occurred during sign in');
     }
   }
 
-  /**
-   * Darken or lighten a hex color for hover states.
-   */
-  adjustBrightness(hex: string, percent: number): string {
-    const num = parseInt(hex.replace('#', ''), 16);
-    const r = Math.min(255, Math.max(0, (num >> 16) + percent));
-    const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00ff) + percent));
-    const b = Math.min(255, Math.max(0, (num & 0x0000ff) + percent));
-    return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
+  private navigateAfterLogin(): void {
+    const returnUrl = sessionStorage.getItem('auth_return_url');
+    sessionStorage.removeItem('auth_return_url');
+    this.router.navigateByUrl(returnUrl && returnUrl !== '/auth/login' ? returnUrl : '/');
   }
 
   private storeReturnUrl(): void {
@@ -251,8 +339,8 @@ export class LoginPage implements OnInit, OnDestroy {
               finalDestination = referrerPath;
             }
           }
-        } catch (e) {
-          // Invalid referrer URL, ignore
+        } catch {
+          // invalid referrer, ignore
         }
       }
     }

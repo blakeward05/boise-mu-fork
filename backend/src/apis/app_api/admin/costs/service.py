@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
-from apis.app_api.storage.dynamodb_storage import DynamoDBStorage
+from apis.app_api.storage import get_metadata_storage
 from .models import (
     TopUserCost,
     SystemCostSummary,
@@ -24,15 +24,8 @@ logger = logging.getLogger(__name__)
 class AdminCostService:
     """Service for admin cost dashboard operations."""
 
-    def __init__(self, storage: Optional[DynamoDBStorage] = None):
-        """
-        Initialize the admin cost service.
-
-        Args:
-            storage: Optional DynamoDB storage instance. If not provided,
-                     a new instance will be created.
-        """
-        self.storage = storage or DynamoDBStorage()
+    def __init__(self, storage=None):
+        self.storage = storage or get_metadata_storage()
 
     def _get_current_period(self) -> str:
         """Get the current month period in YYYY-MM format."""

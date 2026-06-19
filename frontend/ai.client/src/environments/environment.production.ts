@@ -28,12 +28,13 @@
  */
 export const environment = {
     production: true,
-    // Runtime values loaded from /config.json
-    // These are placeholders for fallback only
+    // Runtime values loaded from /config.json — these are placeholders for fallback only
     appApiUrl: '',
-    version: '',
-    cognitoDomainUrl: '',
-    cognitoAppClientId: '',
-    cognitoRegion: 'us-east-1',
     inferenceApiUrl: '',
+    version: '',
+    oidcAuthorizationUrl: '',
+    oidcTokenUrl: '',
+    oidcClientId: '',
+    oidcScopes: 'openid profile email',
+    localAuthEnabled: false,
 };

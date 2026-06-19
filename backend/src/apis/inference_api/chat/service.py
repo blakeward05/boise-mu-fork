@@ -6,10 +6,9 @@ Contains business logic for chat operations, including agent creation and manage
 import logging
 import hashlib
 import os
+import re
 from typing import Optional, List, Tuple
 from datetime import datetime, timezone
-
-import boto3
 
 # from agentcore.agent.agent import ChatbotAgent
 from agents.main_agent.main_agent import MainAgent
@@ -47,29 +46,12 @@ def _create_cache_key(
     system_prompt: Optional[str],
     caching_enabled: Optional[bool],
     provider: Optional[str],
-    max_tokens: Optional[int]
+    max_tokens: Optional[int],
+    endpoint_url: Optional[str] = None,
 ) -> Tuple:
-    """
-    Create a cache key for agent instances
-
-    Args:
-        session_id: Session identifier
-        user_id: User identifier
-        enabled_tools: List of enabled tool names
-        model_id: Model identifier
-        temperature: Model temperature
-        system_prompt: System prompt text
-        caching_enabled: Whether caching is enabled
-        provider: LLM provider
-        max_tokens: Maximum tokens to generate
-
-    Returns:
-        Tuple suitable for use as cache key
-    """
-    # Hash the tools list for stable key
+    """Create a cache key for agent instances."""
     tools_hash = _hash_tools(enabled_tools)
 
-    # Hash system prompt if provided (can be very long)
     prompt_hash = None
     if system_prompt:
         prompt_hash = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
@@ -83,7 +65,8 @@ def _create_cache_key(
         prompt_hash,
         caching_enabled or False,
         provider or "bedrock",
-        max_tokens or 0
+        max_tokens or 0,
+        endpoint_url or "",
     )
 
 
@@ -104,14 +87,16 @@ def get_agent(
     system_prompt: Optional[str] = None,
     caching_enabled: Optional[bool] = None,
     provider: Optional[str] = None,
-    max_tokens: Optional[int] = None
+    max_tokens: Optional[int] = None,
+    endpoint_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
 ) -> MainAgent:
     """
-    Get or create agent instance with current configuration for session
+    Get or create agent instance with current configuration for session.
 
     Implements LRU caching to reduce agent initialization overhead.
     Cache key includes all configuration parameters to ensure correct behavior.
-    Session message history is managed by AgentCore Memory automatically.
 
     Args:
         session_id: Session identifier
@@ -121,13 +106,15 @@ def get_agent(
         temperature: Model temperature
         system_prompt: System prompt text
         caching_enabled: Whether to enable prompt caching (Bedrock only)
-        provider: LLM provider ("bedrock", "openai", or "gemini")
+        provider: LLM provider string
         max_tokens: Maximum tokens to generate
+        endpoint_url: Custom base URL (OpenAI-compatible providers)
+        api_key: Resolved API key for the endpoint
+        extra_headers: Additional HTTP headers (e.g. APIM subscription key)
 
     Returns:
         MainAgent instance (cached or newly created)
     """
-    # Create cache key from all configuration parameters
     cache_key = _create_cache_key(
         session_id=session_id,
         user_id=user_id,
@@ -137,18 +124,16 @@ def get_agent(
         system_prompt=system_prompt,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        endpoint_url=endpoint_url,
     )
 
-    # Check cache
     if cache_key in _agent_cache:
         logger.debug("✅ Agent cache hit")
         return _agent_cache[cache_key]
 
-    # Cache miss - create new agent
     logger.debug("⚠️ Agent cache miss - creating new instance")
 
-    # Create agent with multi-provider support
     agent = MainAgent(
         session_id=session_id,
         user_id=user_id,
@@ -159,7 +144,10 @@ def get_agent(
         system_prompt=system_prompt,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        endpoint_url=endpoint_url,
+        api_key=api_key,
+        extra_headers=extra_headers,
     )
 
     # Add to cache with LRU eviction
@@ -219,6 +207,81 @@ Output: Debug TypeError Map Error
 Focus on being informative and scannable. The title should allow users to quickly identify this conversation in a list."""
 
 
+def _title_heuristic(text: str) -> str:
+    """Extract a readable title from the first few meaningful words of user input."""
+    # Strip leading filler phrases
+    text = re.sub(
+        r"^(?:can you|could you|please|help me|i need to|how do i|"
+        r"what is|what are|how to|i want to|i would like to)\s+",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    )
+    # Take first ~60 characters to work with
+    text = text[:60]
+    # Remove special characters except common punctuation
+    text = re.sub(r"[^\w\s:&\-]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # Title-case and enforce 50-char limit
+    title = text.title()
+    if len(title) > 50:
+        truncated = title[:47].rsplit(" ", 1)[0]
+        title = (truncated + "...") if truncated else title[:47] + "..."
+    return title or "New Conversation"
+
+
+async def _call_llm_for_title(user_input: str) -> Optional[str]:
+    """Try to generate a title using the first enabled OpenAI-compatible managed model.
+
+    Returns the generated title string, or None if no suitable model is configured
+    or if the call fails.
+    """
+    try:
+        import httpx
+        from apis.shared.models.managed_models import get_managed_models_service
+
+        service = get_managed_models_service()
+        models = await service.list_managed_models(enabled_only=True)
+
+        # Pick first non-Bedrock model with an endpoint URL (OpenAI-compatible)
+        model = next(
+            (m for m in models if m.provider.lower() != "bedrock" and m.endpoint_url),
+            None,
+        )
+        if not model:
+            return None
+
+        api_key = os.environ.get(model.api_key_env_var or "", "") or "none"
+        endpoint = model.endpoint_url.rstrip("/")
+
+        payload = {
+            "model": model.model_id,
+            "messages": [
+                {"role": "system", "content": TITLE_GENERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_input},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 50,
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{endpoint}/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            title = data["choices"][0]["message"]["content"].strip()
+            if len(title) > 50:
+                title = title[:47] + "..."
+            return title
+
+    except Exception as exc:
+        logger.debug("LLM title generation failed, will use heuristic: %s", exc)
+        return None
+
+
 async def generate_conversation_title(
     session_id: str,
     user_id: str,
@@ -250,44 +313,13 @@ async def generate_conversation_title(
         logger.debug(f"Truncated input from {len(user_input)} to {MAX_INPUT_LENGTH} chars")
 
     try:
-        # Initialize Bedrock Runtime client
-        bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
-        bedrock_client = boto3.client('bedrock-runtime', region_name=bedrock_region)
+        logger.info("Generating title for session %s (input length: %d chars)", session_id, len(truncated_input))
 
-        # Prepare request for Nova Micro
-        # us.amazon.nova-micro-v1:0 is the fastest, most cost-effective model
-        request_body = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"text": truncated_input}]
-                }
-            ],
-            "system": [{"text": TITLE_GENERATION_SYSTEM_PROMPT}],
-            "inferenceConfig": {
-                "temperature": 0.3,  # Low temperature for consistent, focused output
-                "maxTokens": 50,      # Title should be very short
-                "topP": 0.9
-            }
-        }
-
-        logger.info(f"🎯 Generating title for session {session_id} (input length: {len(truncated_input)} chars)")
-
-        # Call Bedrock Nova Micro
-        response = bedrock_client.converse(
-            modelId="us.amazon.nova-micro-v1:0",
-            messages=request_body["messages"],
-            system=request_body["system"],
-            inferenceConfig=request_body["inferenceConfig"]
-        )
-
-        # Extract generated title from response
-        title = response["output"]["message"]["content"][0]["text"].strip()
-
-        # Enforce 50 character limit (just in case model exceeds)
-        if len(title) > 50:
-            title = title[:47] + "..."
-            logger.warning(f"Title exceeded 50 chars, truncated to: {title}")
+        # Try configured LLM first; fall back to heuristic
+        title = await _call_llm_for_title(truncated_input)
+        if title is None:
+            title = _title_heuristic(truncated_input)
+            logger.debug("Using heuristic title: %s", title)
 
         logger.info(f"✅ Generated title: '{title}' for session {session_id}")
 

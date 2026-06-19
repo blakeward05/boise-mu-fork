@@ -383,7 +383,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       documentId = uploadUrlResponse.documentId;
 
       // Step 2: Upload to S3 with progress tracking
-      await this.documentService.uploadToS3(uploadUrlResponse.uploadUrl, file, (progress) => {
+      await this.documentService.uploadToStorage(uploadUrlResponse.uploadUrl, file, (progress) => {
         this.currentUpload.update((current) => {
           if (!current) return current;
           return { ...current, progress };

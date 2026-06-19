@@ -23,9 +23,13 @@
 export const environment = {
     production: false,
     appApiUrl: 'http://localhost:8000',
-    version: 'dev',
-    cognitoDomainUrl: '',
-    cognitoAppClientId: '',
-    cognitoRegion: 'us-east-1',
     inferenceApiUrl: 'http://localhost:8001',
+    version: 'dev',
+    // OIDC (Azure Entra or any OIDC provider) — leave empty to disable SSO
+    oidcAuthorizationUrl: '',
+    oidcTokenUrl: '',
+    oidcClientId: '',
+    oidcScopes: 'openid profile email',
+    // Enable local username/password auth for development/bootstrap
+    localAuthEnabled: true,
 };

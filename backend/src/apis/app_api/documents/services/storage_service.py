@@ -1,6 +1,15 @@
-"""S3 storage service for document upload/download
+"""
+Document source file storage service.
 
-Handles presigned URL generation for client-side uploads and downloads.
+Generates upload and download URLs for document source files using the
+local FileStorage backend. Upload goes to:
+  PUT /api/assistants/{assistant_id}/documents/{document_id}/source
+
+Download is served from:
+  GET /api/assistants/{assistant_id}/documents/{document_id}/source
+
+Cloud migration: when AzureBlobStorage is wired into get_file_storage(),
+this service requires no changes — the URLs returned will be blob SAS URLs.
 """
 
 import logging
@@ -8,121 +17,49 @@ import os
 import re
 from typing import Tuple
 
+from apis.shared.storage import get_file_storage
+
 logger = logging.getLogger(__name__)
 
-
-def _get_documents_bucket() -> str:
-    """Get documents S3 bucket name from environment"""
-    bucket = os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
-    if not bucket:
-        raise ValueError("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME environment variable not set")
-    return bucket
+_APP_URL = os.environ.get("APP_URL", "http://localhost:8000").rstrip("/")
 
 
 def _sanitize_filename(filename: str) -> str:
-    """Sanitize filename for S3 key usage.
-    
-    Lowercases and replaces disallowed characters with underscores.
-    Must be used consistently wherever s3_key is generated.
-    """
     filename = filename.lower()
     filename = re.sub(r"[^a-zA-Z0-9_.\-\(\)]", "_", filename)
     return filename
 
 
-def _get_s3_key(assistant_id: str, document_id: str, filename: str) -> str:
-    """
-    Generate S3 key for document storage
-
-    Pattern: assistants/{assistant_id}/documents/{document_id}/{filename}
-
-    Args:
-        assistant_id: Parent assistant identifier
-        document_id: Document identifier
-        filename: Original filename
-
-    Returns:
-        S3 object key
-    """
-    return f"assistants/{assistant_id}/documents/{document_id}/{filename}"
+def _get_storage_key(assistant_id: str, document_id: str, filename: str) -> str:
+    safe = _sanitize_filename(filename)
+    return f"assistant-docs/{assistant_id}/documents/{document_id}/{safe}"
 
 
-async def generate_upload_url(assistant_id: str, document_id: str, filename: str, content_type: str, expires_in: int = 3600) -> Tuple[str, str]:
-    """
-    Generate presigned S3 URL for client-side upload
-
-    Args:
-        assistant_id: Parent assistant identifier
-        document_id: Document identifier
-        filename: Original filename
-        content_type: MIME type
-        expires_in: URL expiration in seconds (default: 1 hour)
-
-    Returns:
-        Tuple of (presigned_url, s3_key)
-    """
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError:
-        logger.error("boto3 is required for S3 operations")
-        raise
-
-    # Use region from AWS_REGION env var to ensure presigned URLs use regional endpoint
-    # This is critical for CORS - global endpoint redirects break CORS preflight
-    # Force SigV4 signing and regional endpoint to avoid CORS issues with global endpoint
-    region = os.environ.get("AWS_REGION", "us-west-2")
-    s3_config = Config(
-        signature_version="s3v4",
-        s3={"addressing_style": "virtual"},
-    )
-    s3_client = boto3.client("s3", region_name=region, config=s3_config, endpoint_url=f"https://s3.{region}.amazonaws.com")
-
-    bucket = _get_documents_bucket()
-
-    # Sanitize filename using shared helper
-    filename = _sanitize_filename(filename)
-
-    s3_key = _get_s3_key(assistant_id, document_id, filename)
-
-    presigned_url = s3_client.generate_presigned_url(
-        "put_object", Params={"Bucket": bucket, "Key": s3_key, "ContentType": content_type}, ExpiresIn=expires_in
-    )
-
-    logger.info(f"Generated presigned upload URL for {s3_key} (expires in {expires_in}s)")
-    return presigned_url, s3_key
+async def generate_upload_url(
+    assistant_id: str,
+    document_id: str,
+    filename: str,
+    content_type: str,
+    expires_in: int = 3600,
+) -> Tuple[str, str]:
+    """Return (upload_url, storage_key)."""
+    key = _get_storage_key(assistant_id, document_id, filename)
+    url = f"{_APP_URL}/api/assistants/{assistant_id}/documents/{document_id}/source"
+    return url, key
 
 
 async def generate_download_url(s3_key: str, expires_in: int = 3600) -> str:
     """
-    Generate presigned S3 URL for client-side download
+    Return a download URL for a document source file.
 
-    Args:
-        s3_key: S3 object key (stored in document record)
-        expires_in: URL expiration in seconds (default: 1 hour)
-
-    Returns:
-        Presigned URL for download
+    Parses the storage key pattern (assistant-docs/{assistant_id}/documents/{document_id}/...)
+    to build the local endpoint URL. When AzureBlobStorage is active, this
+    method should instead return a SAS URL via get_file_storage().get_download_url().
     """
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError:
-        logger.error("boto3 is required for S3 operations")
-        raise
-
-    # Use region from AWS_REGION env var to ensure presigned URLs use regional endpoint
-    # This is critical for CORS - global endpoint redirects break CORS preflight
-    region = os.environ.get("AWS_REGION", "us-west-2")
-    s3_config = Config(
-        signature_version="s3v4",
-        s3={"addressing_style": "virtual"},
-    )
-    s3_client = boto3.client("s3", region_name=region, config=s3_config, endpoint_url=f"https://s3.{region}.amazonaws.com")
-
-    bucket = _get_documents_bucket()
-
-    presigned_url = s3_client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": s3_key}, ExpiresIn=expires_in)
-
-    logger.info(f"Generated presigned download URL for {s3_key} (expires in {expires_in}s)")
-    return presigned_url
+    parts = s3_key.split("/")
+    if len(parts) >= 4 and parts[0] == "assistant-docs":
+        assistant_id = parts[1]
+        document_id = parts[3]
+        return f"{_APP_URL}/api/assistants/{assistant_id}/documents/{document_id}/source"
+    logger.warning("Unexpected storage key format for download: %s", s3_key)
+    return f"{_APP_URL}/api/documents/source?key={s3_key}"

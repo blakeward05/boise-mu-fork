@@ -1,0 +1,122 @@
+services:
+
+  # ─────────────────────────────────────────────
+  # MongoDB — swap DATABASE_URL for Cosmos DB in Azure
+  # ─────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: boise-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+      MONGO_INITDB_DATABASE: ${DATABASE_NAME:-boise}
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─────────────────────────────────────────────
+  # App API — FastAPI on port 8000
+  # ─────────────────────────────────────────────
+  app-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.app-api
+    container_name: boise-app-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/${DATABASE_NAME:-boise}?authSource=admin
+      DATABASE_NAME: ${DATABASE_NAME:-boise}
+      LOCAL_STORAGE_PATH: /app/data/files
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
+      LOCAL_JWT_SECRET: ${LOCAL_JWT_SECRET:-change-me-in-production}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4200}
+      ENABLE_QUOTA_ENFORCEMENT: ${ENABLE_QUOTA_ENFORCEMENT:-false}
+    volumes:
+      - app_files:/app/data/files
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────
+  # Inference API — FastAPI on port 8001
+  # ─────────────────────────────────────────────
+  inference-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.inference-api
+    container_name: boise-inference-api
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/${DATABASE_NAME:-boise}?authSource=admin
+      DATABASE_NAME: ${DATABASE_NAME:-boise}
+      LOCAL_STORAGE_PATH: /app/data/files
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
+      LOCAL_JWT_SECRET: ${LOCAL_JWT_SECRET:-change-me-in-production}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4200}
+      ENABLE_QUOTA_ENFORCEMENT: ${ENABLE_QUOTA_ENFORCEMENT:-false}
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      # LLM providers — set the ones you use, leave others blank
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}          # OpenAI-compatible endpoint
+      DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+      AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-}
+      AZURE_AI_FOUNDRY_API_KEY: ${AZURE_AI_FOUNDRY_API_KEY:-}
+      AZURE_APIM_ENDPOINT: ${AZURE_APIM_ENDPOINT:-}
+      AZURE_APIM_SUBSCRIPTION_KEY: ${AZURE_APIM_SUBSCRIPTION_KEY:-}
+      # Optional: keep Bedrock as a provider
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - app_files:/app/data/files
+      - chroma_data:/app/data/chroma
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────
+  # Frontend — Angular dev server on port 4200
+  # For production build: replace with nginx serving dist/
+  # ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend/ai.client
+      dockerfile: Dockerfile.dev
+    container_name: boise-frontend
+    restart: unless-stopped
+    ports:
+      - "4200:4200"
+    environment:
+      APP_API_URL: ${APP_API_URL:-http://localhost:8000}
+      INFERENCE_API_URL: ${INFERENCE_API_URL:-http://localhost:8001}
+    depends_on:
+      - app-api
+      - inference-api
+
+volumes:
+  mongodb_data:
+    driver: local
+  app_files:
+    driver: local
+  chroma_data:
+    driver: local

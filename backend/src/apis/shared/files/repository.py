@@ -1,157 +1,84 @@
-"""
-File Upload Repository
+"""MongoDB repository for file upload metadata and user storage quotas."""
 
-DynamoDB operations for file metadata and user quota tracking.
-"""
-
-import os
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Optional, List, Tuple
+from datetime import datetime, timezone, timedelta
 
-import boto3
-from botocore.exceptions import ClientError
+from pymongo import DESCENDING
 
+from apis.shared.database import get_database, BaseRepository, Collections
 from .models import FileMetadata, UserFileQuota, FileStatus
 
 logger = logging.getLogger(__name__)
 
+_TTL_DAYS = 7
 
-class FileUploadRepository:
+_repository: Optional["FileUploadRepository"] = None
+
+
+def get_file_upload_repository() -> "FileUploadRepository":
+    global _repository
+    if _repository is None:
+        _repository = FileUploadRepository()
+    return _repository
+
+
+class FileUploadRepository(BaseRepository):
+    """MongoDB repository for file metadata and per-user quotas.
+
+    Files document schema (_id = upload_id):
+        _id:          upload_id
+        user_id:      owner
+        session_id:   associated session
+        filename:     original filename
+        mime_type:    MIME type string
+        size_bytes:   int
+        storage_key:  path on local filesystem or blob storage key
+        storage_bucket: optional bucket/container name
+        status:       FileStatus value
+        created_at:   datetime
+        updated_at:   datetime
+        expires_at:   datetime (for TTL index)
+
+    Quotas document schema in user_settings collection (keyed per user):
+        Stored as a sub-document inside USER_SETTINGS — avoids a separate collection.
+        Alternatively tracked here via a separate "quota" document (_id = f"quota:{user_id}").
     """
-    Repository for File Upload CRUD operations in DynamoDB.
 
-    Key Patterns:
-    - File: PK=USER#{userId}, SK=FILE#{uploadId}
-    - Quota: PK=USER#{userId}, SK=QUOTA
+    def __init__(self) -> None:
+        super().__init__(get_database(), Collections.USER_FILES)
+        self._quota_col = get_database()[Collections.USER_SETTINGS]
 
-    GSI (SessionIndex):
-    - GSI1PK=CONV#{sessionId}, GSI1SK=FILE#{uploadId}
-    """
-
-    def __init__(self, table_name: Optional[str] = None):
-        """Initialize repository with DynamoDB table."""
-        self.table_name = table_name or os.environ.get(
-            "DYNAMODB_USER_FILES_TABLE_NAME", "user-files"
-        )
-        self._dynamodb = boto3.resource("dynamodb")
-        self._table = self._dynamodb.Table(self.table_name)
-
-    # =========================================================================
-    # File CRUD Operations
-    # =========================================================================
+    # ── File CRUD ──────────────────────────────────────────────────
 
     async def create_file(self, file_meta: FileMetadata) -> FileMetadata:
-        """
-        Create a new file metadata record.
-
-        Args:
-            file_meta: The FileMetadata to create
-
-        Returns:
-            The created FileMetadata
-        """
-        try:
-            item = file_meta.to_dynamo_item()
-            # Convert floats to Decimals for DynamoDB
-            item = self._convert_floats_to_decimals(item)
-
-            self._table.put_item(
-                Item=item,
-                ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            )
-
-            logger.info(f"Created file metadata: {file_meta.upload_id}")
-            return file_meta
-
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                raise ValueError(f"File '{file_meta.upload_id}' already exists")
-            logger.error(f"Error creating file metadata: {e}")
-            raise
+        doc = self._meta_to_doc(file_meta)
+        await self._insert_one(doc)
+        return file_meta
 
     async def get_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
-        """
-        Get a file by user ID and upload ID.
-
-        Args:
-            user_id: The owner's user ID
-            upload_id: The upload identifier
-
-        Returns:
-            FileMetadata if found, None otherwise
-        """
-        try:
-            response = self._table.get_item(
-                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"}
-            )
-            item = response.get("Item")
-            if not item:
-                return None
-            return FileMetadata.from_dynamo_item(item)
-        except ClientError as e:
-            logger.error(f"Error getting file {upload_id}: {e}")
-            raise
+        doc = await self._find_one({"_id": upload_id, "user_id": user_id})
+        return self._doc_to_meta(doc) if doc else None
 
     async def update_file_status(
         self, user_id: str, upload_id: str, status: FileStatus
     ) -> Optional[FileMetadata]:
-        """
-        Update a file's status.
-
-        Args:
-            user_id: The owner's user ID
-            upload_id: The upload identifier
-            status: New status
-
-        Returns:
-            Updated FileMetadata or None if not found
-        """
-        try:
-            response = self._table.update_item(
-                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
-                UpdateExpression="SET #status = :status, updatedAt = :now",
-                ExpressionAttributeNames={"#status": "status"},
-                ExpressionAttributeValues={
-                    ":status": status.value if isinstance(status, FileStatus) else status,
-                    ":now": datetime.now(timezone.utc).isoformat() + "Z",
-                },
-                ConditionExpression="attribute_exists(PK)",
-                ReturnValues="ALL_NEW",
-            )
-            return FileMetadata.from_dynamo_item(response["Attributes"])
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                return None
-            logger.error(f"Error updating file status {upload_id}: {e}")
-            raise
+        status_val = status.value if hasattr(status, "value") else status
+        now = datetime.now(timezone.utc)
+        count = await self._update_one(
+            {"_id": upload_id, "user_id": user_id},
+            {"$set": {"status": status_val, "updated_at": now}},
+        )
+        if count == 0:
+            return None
+        return await self.get_file(user_id, upload_id)
 
     async def delete_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
-        """
-        Delete a file metadata record.
-
-        Args:
-            user_id: The owner's user ID
-            upload_id: The upload identifier
-
-        Returns:
-            Deleted FileMetadata or None if not found
-        """
-        try:
-            response = self._table.delete_item(
-                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
-                ReturnValues="ALL_OLD",
-            )
-            old_item = response.get("Attributes")
-            if not old_item:
-                return None
-
-            logger.info(f"Deleted file metadata: {upload_id}")
-            return FileMetadata.from_dynamo_item(old_item)
-        except ClientError as e:
-            logger.error(f"Error deleting file {upload_id}: {e}")
-            raise
+        doc = await self._find_one({"_id": upload_id, "user_id": user_id})
+        if not doc:
+            return None
+        await self._delete_one({"_id": upload_id})
+        return self._doc_to_meta(doc)
 
     async def list_user_files(
         self,
@@ -160,261 +87,109 @@ class FileUploadRepository:
         cursor: Optional[str] = None,
         status: Optional[FileStatus] = None,
     ) -> Tuple[List[FileMetadata], Optional[str]]:
-        """
-        List files for a user with pagination.
-
-        Args:
-            user_id: The user identifier
-            limit: Maximum number of files to return
-            cursor: Pagination cursor (last evaluated key as base64)
-            status: Optional status filter
-
-        Returns:
-            Tuple of (files, next_cursor)
-        """
-        try:
-            query_params = {
-                "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk_prefix)",
-                "ExpressionAttributeValues": {
-                    ":pk": f"USER#{user_id}",
-                    ":sk_prefix": "FILE#",
-                },
-                "Limit": limit,
-                "ScanIndexForward": False,  # Newest first (ULID sorts chronologically)
-            }
-
-            if status:
-                query_params["FilterExpression"] = "#status = :status"
-                query_params["ExpressionAttributeNames"] = {"#status": "status"}
-                query_params["ExpressionAttributeValues"][":status"] = (
-                    status.value if isinstance(status, FileStatus) else status
-                )
-
-            if cursor:
-                import base64
-                import json
-                query_params["ExclusiveStartKey"] = json.loads(
-                    base64.b64decode(cursor).decode("utf-8")
-                )
-
-            response = self._table.query(**query_params)
-
-            files = [FileMetadata.from_dynamo_item(item) for item in response.get("Items", [])]
-
-            # Build next cursor
-            next_cursor = None
-            if "LastEvaluatedKey" in response:
-                import base64
-                import json
-                next_cursor = base64.b64encode(
-                    json.dumps(response["LastEvaluatedKey"]).encode("utf-8")
-                ).decode("utf-8")
-
-            return files, next_cursor
-
-        except ClientError as e:
-            logger.error(f"Error listing files for user {user_id}: {e}")
-            raise
+        filt: dict = {"user_id": user_id}
+        if status:
+            filt["status"] = status.value if hasattr(status, "value") else status
+        skip = int(cursor) if cursor and cursor.isdigit() else 0
+        docs = await self._find_many(
+            filt,
+            sort=[("created_at", DESCENDING)],
+            limit=limit,
+            skip=skip,
+        )
+        items = [self._doc_to_meta(d) for d in docs]
+        next_cursor = str(skip + limit) if len(docs) == limit else None
+        return items, next_cursor
 
     async def list_session_files(
         self, session_id: str, status: Optional[FileStatus] = None
     ) -> List[FileMetadata]:
-        """
-        List files for a session using the SessionIndex GSI.
+        filt: dict = {"session_id": session_id}
+        if status:
+            filt["status"] = status.value if hasattr(status, "value") else status
+        docs = await self._find_many(filt)
+        return [self._doc_to_meta(d) for d in docs]
 
-        Args:
-            session_id: The session/conversation identifier
-            status: Optional status filter
+    async def delete_session_files(self, session_id: str) -> List[FileMetadata]:
+        docs = await self._find_many({"session_id": session_id})
+        if docs:
+            ids = [d["_id"] for d in docs]
+            await self._collection.delete_many({"_id": {"$in": ids}})
+        return [self._doc_to_meta(d) for d in docs]
 
-        Returns:
-            List of FileMetadata
-        """
-        try:
-            query_params = {
-                "IndexName": "SessionIndex",
-                "KeyConditionExpression": "GSI1PK = :pk",
-                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}"},
-                "ScanIndexForward": False,
-            }
-
-            if status:
-                query_params["FilterExpression"] = "#status = :status"
-                query_params["ExpressionAttributeNames"] = {"#status": "status"}
-                query_params["ExpressionAttributeValues"][":status"] = (
-                    status.value if isinstance(status, FileStatus) else status
-                )
-
-            response = self._table.query(**query_params)
-            items = response.get("Items", [])
-
-            # Handle pagination
-            while "LastEvaluatedKey" in response:
-                query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                response = self._table.query(**query_params)
-                items.extend(response.get("Items", []))
-
-            return [FileMetadata.from_dynamo_item(item) for item in items]
-
-        except ClientError as e:
-            logger.error(f"Error listing files for session {session_id}: {e}")
-            raise
-
-    # =========================================================================
-    # Quota Operations
-    # =========================================================================
+    # ── Quota ──────────────────────────────────────────────────────
 
     async def get_user_quota(self, user_id: str) -> UserFileQuota:
-        """
-        Get user's file quota.
-
-        Args:
-            user_id: The user identifier
-
-        Returns:
-            UserFileQuota (empty if not found)
-        """
-        try:
-            response = self._table.get_item(
-                Key={"PK": f"USER#{user_id}", "SK": "QUOTA"}
+        doc = await self._quota_col.find_one({"_id": f"quota:{user_id}"})
+        if not doc:
+            return UserFileQuota(
+                user_id=user_id,
+                total_bytes=0,
+                file_count=0,
+                updated_at=datetime.now(timezone.utc),
             )
-            item = response.get("Item")
-            if not item:
-                return UserFileQuota(user_id=user_id)
-            return UserFileQuota.from_dynamo_item(item)
-        except ClientError as e:
-            logger.error(f"Error getting quota for user {user_id}: {e}")
-            raise
+        return UserFileQuota(
+            user_id=user_id,
+            total_bytes=doc.get("total_bytes", 0),
+            file_count=doc.get("file_count", 0),
+            updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
+        )
 
     async def increment_quota(self, user_id: str, size_bytes: int) -> UserFileQuota:
-        """
-        Atomically increment user's quota.
-
-        Args:
-            user_id: The user identifier
-            size_bytes: Bytes to add
-
-        Returns:
-            Updated UserFileQuota
-        """
-        try:
-            response = self._table.update_item(
-                Key={"PK": f"USER#{user_id}", "SK": "QUOTA"},
-                UpdateExpression=(
-                    "SET userId = :userId, updatedAt = :now "
-                    "ADD totalBytes :size, fileCount :one"
-                ),
-                ExpressionAttributeValues={
-                    ":userId": user_id,
-                    ":now": datetime.now(timezone.utc).isoformat() + "Z",
-                    ":size": size_bytes,
-                    ":one": 1,
-                },
-                ReturnValues="ALL_NEW",
-            )
-            return UserFileQuota.from_dynamo_item(response["Attributes"])
-        except ClientError as e:
-            logger.error(f"Error incrementing quota for user {user_id}: {e}")
-            raise
+        await self._quota_col.update_one(
+            {"_id": f"quota:{user_id}"},
+            {
+                "$inc": {"total_bytes": size_bytes, "file_count": 1},
+                "$set": {"updated_at": datetime.now(timezone.utc), "user_id": user_id},
+            },
+            upsert=True,
+        )
+        return await self.get_user_quota(user_id)
 
     async def decrement_quota(self, user_id: str, size_bytes: int) -> UserFileQuota:
-        """
-        Atomically decrement user's quota.
+        await self._quota_col.update_one(
+            {"_id": f"quota:{user_id}"},
+            {
+                "$inc": {"total_bytes": -size_bytes, "file_count": -1},
+                "$set": {"updated_at": datetime.now(timezone.utc)},
+            },
+            upsert=True,
+        )
+        return await self.get_user_quota(user_id)
 
-        Args:
-            user_id: The user identifier
-            size_bytes: Bytes to remove
+    # ── Helpers ────────────────────────────────────────────────────
 
-        Returns:
-            Updated UserFileQuota
-        """
-        try:
-            response = self._table.update_item(
-                Key={"PK": f"USER#{user_id}", "SK": "QUOTA"},
-                UpdateExpression=(
-                    "SET userId = :userId, updatedAt = :now "
-                    "ADD totalBytes :negSize, fileCount :negOne"
-                ),
-                ExpressionAttributeValues={
-                    ":userId": user_id,
-                    ":now": datetime.now(timezone.utc).isoformat() + "Z",
-                    ":negSize": -size_bytes,
-                    ":negOne": -1,
-                },
-                ReturnValues="ALL_NEW",
-            )
-            return UserFileQuota.from_dynamo_item(response["Attributes"])
-        except ClientError as e:
-            logger.error(f"Error decrementing quota for user {user_id}: {e}")
-            raise
+    @staticmethod
+    def _meta_to_doc(meta: FileMetadata) -> dict:
+        status_val = meta.status.value if hasattr(meta.status, "value") else meta.status
+        created = meta.created_at if isinstance(meta.created_at, datetime) else datetime.now(timezone.utc)
+        return {
+            "_id": meta.upload_id,
+            "user_id": meta.user_id,
+            "session_id": meta.session_id,
+            "filename": meta.filename,
+            "mime_type": meta.mime_type,
+            "size_bytes": meta.size_bytes,
+            "storage_key": meta.storage_key,
+            "storage_bucket": meta.storage_bucket,
+            "status": status_val,
+            "created_at": created,
+            "updated_at": meta.updated_at if isinstance(meta.updated_at, datetime) else datetime.now(timezone.utc),
+            "expires_at": created + timedelta(days=_TTL_DAYS),
+        }
 
-    # =========================================================================
-    # Cascade Delete Operations
-    # =========================================================================
-
-    async def delete_session_files(self, session_id: str) -> list[FileMetadata]:
-        """
-        Delete all files for a session (cascade delete).
-
-        Uses the SessionIndex GSI to find all files, then deletes each one.
-        Also decrements the user quota for each deleted file.
-
-        Args:
-            session_id: The session/conversation identifier
-
-        Returns:
-            List of deleted FileMetadata records
-        """
-        deleted_files = []
-
-        try:
-            # Get all files for this session (including pending)
-            files = await self.list_session_files(session_id, status=None)
-
-            if not files:
-                logger.info(f"No files found for session {session_id}")
-                return deleted_files
-
-            # Delete each file's metadata
-            for file_meta in files:
-                try:
-                    deleted = await self.delete_file(file_meta.user_id, file_meta.upload_id)
-                    if deleted:
-                        deleted_files.append(deleted)
-                        logger.debug(f"Deleted file {file_meta.upload_id} for session cascade delete")
-                except Exception as e:
-                    logger.warning(f"Failed to delete file {file_meta.upload_id}: {e}")
-
-            logger.info(f"Cascade deleted {len(deleted_files)} files for session {session_id}")
-            return deleted_files
-
-        except ClientError as e:
-            logger.error(f"Error in cascade delete for session {session_id}: {e}")
-            raise
-
-    # =========================================================================
-    # Helper Methods
-    # =========================================================================
-
-    def _convert_floats_to_decimals(self, item: dict) -> dict:
-        """Convert float values to Decimal for DynamoDB compatibility."""
-        converted = {}
-        for key, value in item.items():
-            if isinstance(value, float):
-                converted[key] = Decimal(str(value))
-            elif isinstance(value, dict):
-                converted[key] = self._convert_floats_to_decimals(value)
-            else:
-                converted[key] = value
-        return converted
-
-
-# Global repository instance
-_repository_instance: Optional[FileUploadRepository] = None
-
-
-def get_file_upload_repository() -> FileUploadRepository:
-    """Get or create the global FileUploadRepository instance."""
-    global _repository_instance
-    if _repository_instance is None:
-        _repository_instance = FileUploadRepository()
-    return _repository_instance
+    @staticmethod
+    def _doc_to_meta(doc: dict) -> FileMetadata:
+        return FileMetadata(
+            upload_id=doc["_id"],
+            user_id=doc["user_id"],
+            session_id=doc.get("session_id", ""),
+            filename=doc.get("filename", ""),
+            mime_type=doc.get("mime_type", ""),
+            size_bytes=doc.get("size_bytes", 0),
+            storage_key=doc.get("storage_key", ""),
+            storage_bucket=doc.get("storage_bucket", ""),
+            status=doc.get("status", "pending"),
+            created_at=doc.get("created_at", datetime.now(timezone.utc)),
+            updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
+        )

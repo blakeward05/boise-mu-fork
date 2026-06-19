@@ -83,6 +83,15 @@ async def lifespan(app: FastAPI):
     if cors_origins:
         logger.info(f"CORS Origins: {cors_origins}")
     
+    # MongoDB connection + indexes (when DATABASE_URL is set)
+    if os.environ.get("DATABASE_URL"):
+        from apis.shared.database import init_connection, close_connection as _close_db
+        from apis.shared.database.indexes import ensure_indexes
+        await init_connection()
+        await ensure_indexes()
+        app.state.close_db = _close_db
+        logger.info("MongoDB connected and indexes ensured")
+
     # Create output directories if they don't exist
     base_dir = Path(__file__).parent.parent
     output_dir = os.path.join(base_dir, "output")
@@ -98,7 +107,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("=== Inference API Shutting Down ===")
-    # TODO: Cleanup agent pool, MCP clients, etc.
+    if os.environ.get("DATABASE_URL") and hasattr(app.state, "close_db"):
+        await app.state.close_db()
 
 # Create FastAPI app with lifespan
 app = FastAPI(

@@ -11,9 +11,11 @@ describe('ConfigService', () => {
     inferenceApiUrl: 'https://inference.example.com',
     environment: 'production',
     version: '1.0.0-beta.1',
-    cognitoDomainUrl: 'https://myprefix.auth.us-east-1.amazoncognito.com',
-    cognitoAppClientId: 'test-client-id',
-    cognitoRegion: 'us-east-1',
+    oidcAuthorizationUrl: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize',
+    oidcTokenUrl: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    oidcClientId: 'test-client-id',
+    oidcScopes: 'openid profile email',
+    localAuthEnabled: false,
   };
 
   beforeEach(() => {

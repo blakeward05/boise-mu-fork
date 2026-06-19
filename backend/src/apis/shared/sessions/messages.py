@@ -462,9 +462,76 @@ async def get_messages_from_cloud(
         raise
 
 
+async def get_messages_from_mongo(
+    session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None
+) -> MessagesListResponse:
+    """
+    Retrieve messages stored by MongoSessionManager.
+
+    Reads conversation_messages from the sessions collection and joins with
+    cost/metadata records using the same index-based join as the cloud path.
+    """
+    from apis.shared.database.connection import get_database
+    from .metadata import get_all_message_metadata
+
+    db = get_database()
+    doc = await db["sessions"].find_one(
+        {"_id": session_id, "user_id": user_id},
+        {"conversation_messages": 1, "compaction_state": 1},
+    )
+
+    if not doc:
+        logger.warning("Session %s not found in MongoDB for user %s", session_id, user_id)
+        return MessagesListResponse(messages=[], next_token=None)
+
+    raw_messages: List[Any] = doc.get("conversation_messages") or []
+    compaction_state = doc.get("compaction_state") or {}
+    checkpoint = int(compaction_state.get("checkpoint", 0))
+
+    # Only expose messages from the checkpoint onward (compacted messages are hidden)
+    visible_messages = raw_messages[checkpoint:]
+
+    logger.info(
+        "MongoDB session %s: %d stored messages, checkpoint=%d, %d visible",
+        session_id,
+        len(raw_messages),
+        checkpoint,
+        len(visible_messages),
+    )
+
+    metadata_index = await get_all_message_metadata(session_id, user_id)
+    logger.info("Metadata index contains %d entries", len(metadata_index))
+
+    messages: List[Message] = []
+    for idx, msg in enumerate(visible_messages):
+        actual_idx = checkpoint + idx  # align with stored metadata keys
+        try:
+            metadata = metadata_index.get(str(actual_idx))
+            messages.append(_convert_message(msg, metadata=metadata))
+        except Exception as exc:
+            logger.error("Error converting message %d: %s", actual_idx, exc, exc_info=True)
+
+    paginated, next_page_token = _apply_pagination(messages, limit, next_token)
+
+    start_seq = 0
+    if next_token:
+        try:
+            start_seq = int(base64.b64decode(next_token).decode("utf-8"))
+        except Exception:
+            start_seq = 0
+
+    message_responses = [
+        _convert_message_to_response(msg, session_id, start_seq + idx)
+        for idx, msg in enumerate(paginated)
+    ]
+    return MessagesListResponse(messages=message_responses, next_token=next_page_token)
+
+
 async def get_messages(session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None) -> MessagesListResponse:
     """
     Retrieve messages for a session and user with pagination support.
+
+    Dispatches to MongoDB or AgentCore Memory depending on DATABASE_URL.
 
     Args:
         session_id: Session identifier
@@ -476,8 +543,11 @@ async def get_messages(session_id: str, user_id: str, limit: Optional[int] = Non
         MessagesListResponse with paginated conversation history
 
     Raises:
-        RuntimeError: If AgentCore Memory package is not available
+        RuntimeError: If no storage backend is configured
     """
+    if os.environ.get("DATABASE_URL"):
+        return await get_messages_from_mongo(session_id, user_id, limit, next_token)
+
     if not AGENTCORE_MEMORY_AVAILABLE:
         raise RuntimeError(
             "bedrock_agentcore package is required. "

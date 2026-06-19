@@ -72,7 +72,7 @@
               [class.border-red-500]="modelForm.controls.provider.invalid && modelForm.controls.provider.touched"
             >
               @for (provider of availableProviders; track provider) {
-                <option [value]="provider">{{ provider }}</option>
+                <option [value]="provider">{{ providerLabels[provider] }}</option>
               }
             </select>
             @if (modelForm.controls.provider.invalid && modelForm.controls.provider.touched) {
@@ -97,6 +97,43 @@
               <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Provider name is required</p>
             }
           </div>
+
+          <!-- Endpoint URL (non-Bedrock providers) -->
+          @if (showEndpointFields) {
+            <div>
+              <label for="endpointUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Endpoint URL
+              </label>
+              <input
+                type="url"
+                id="endpointUrl"
+                formControlName="endpointUrl"
+                placeholder="e.g., http://localhost:11434"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+              />
+              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                Base URL of the OpenAI-compatible endpoint (without <code>/v1/chat/completions</code>).
+                Leave blank for native OpenAI or Google Gemini.
+              </p>
+            </div>
+
+            <div>
+              <label for="apiKeyEnvVar" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                API Key Environment Variable
+              </label>
+              <input
+                type="text"
+                id="apiKeyEnvVar"
+                formControlName="apiKeyEnvVar"
+                placeholder="e.g., OLLAMA_API_KEY"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+              />
+              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                Name of the server-side environment variable holding the API key.
+                Leave blank if no key is required (e.g., local Ollama).
+              </p>
+            </div>
+          }
 
           <!-- Reasoning Model Checkbox -->
           <div class="flex items-center gap-3">
@@ -376,12 +413,11 @@
             </div>
           </div>
 
-          <!-- Prompt Caching (Bedrock Only) -->
-          @if (modelForm.value.provider === 'bedrock') {
-            <div>
-              <h3 class="mb-3 text-base/7 font-medium text-gray-900 dark:text-white">
-                Prompt Caching (Bedrock Only)
-              </h3>
+          <!-- Prompt Caching -->
+          <div>
+            <h3 class="mb-3 text-base/7 font-medium text-gray-900 dark:text-white">
+              Prompt Caching
+            </h3>
 
               <!-- Supports Caching Toggle -->
               <div class="mb-4 flex items-center gap-3">
@@ -456,7 +492,6 @@
                 </div>
               }
             </div>
-          }
         </div>
       </div>
 

@@ -11,26 +11,32 @@ import { environment } from '../../environments/environment';
  * values without requiring environment-specific builds.
  */
 export interface RuntimeConfig {
-  /** App API backend URL (from ALB) */
+  /** App API backend URL */
   appApiUrl: string;
 
   /** Environment identifier (dev/staging/production/local) */
   environment: string;
 
-  /** Application version from VERSION file (injected via config.json or environment fallback) */
+  /** Application version */
   version: string;
 
-  /** Cognito User Pool domain URL (e.g., https://myprefix.auth.us-east-1.amazoncognito.com) */
-  cognitoDomainUrl: string;
-
-  /** Cognito App Client ID */
-  cognitoAppClientId: string;
-
-  /** AWS region for Cognito (e.g., us-east-1) */
-  cognitoRegion: string;
-
-  /** Single inference API URL (replaces per-provider runtime endpoint resolution) */
+  /** Inference API URL */
   inferenceApiUrl: string;
+
+  /** OIDC authorization endpoint (leave empty to disable SSO login button) */
+  oidcAuthorizationUrl: string;
+
+  /** OIDC token endpoint */
+  oidcTokenUrl: string;
+
+  /** OIDC client ID (Azure Entra app registration, etc.) */
+  oidcClientId: string;
+
+  /** Space-separated OIDC scopes (default: "openid profile email") */
+  oidcScopes: string;
+
+  /** Whether local username/password auth is enabled */
+  localAuthEnabled: boolean;
 }
 
 /**
@@ -89,23 +95,11 @@ export class ConfigService {
    */
   readonly version = computed(() => this.config()?.version ?? 'unknown');
 
-  /**
-   * Computed signal for Cognito domain URL
-   * Returns empty string if config not loaded
-   */
-  readonly cognitoDomainUrl = computed(() => this.config()?.cognitoDomainUrl ?? '');
-
-  /**
-   * Computed signal for Cognito App Client ID
-   * Returns empty string if config not loaded
-   */
-  readonly cognitoAppClientId = computed(() => this.config()?.cognitoAppClientId ?? '');
-
-  /**
-   * Computed signal for Cognito region
-   * Returns 'us-east-1' if config not loaded
-   */
-  readonly cognitoRegion = computed(() => this.config()?.cognitoRegion ?? 'us-east-1');
+  readonly oidcAuthorizationUrl = computed(() => this.config()?.oidcAuthorizationUrl ?? '');
+  readonly oidcTokenUrl = computed(() => this.config()?.oidcTokenUrl ?? '');
+  readonly oidcClientId = computed(() => this.config()?.oidcClientId ?? '');
+  readonly oidcScopes = computed(() => this.config()?.oidcScopes ?? 'openid profile email');
+  readonly localAuthEnabled = computed(() => this.config()?.localAuthEnabled ?? true);
 
   /**
    * Computed signal for Inference API URL (single runtime endpoint).
@@ -179,12 +173,14 @@ export class ConfigService {
       // Fallback to environment.ts for local development
       const fallbackConfig: RuntimeConfig = {
         appApiUrl: environment.appApiUrl || 'http://localhost:8000',
+        inferenceApiUrl: environment.inferenceApiUrl || 'http://localhost:8001',
         environment: environment.production ? 'production' : 'development',
-        version: (environment as any).version || 'unknown',
-        cognitoDomainUrl: (environment as any).cognitoDomainUrl || '',
-        cognitoAppClientId: (environment as any).cognitoAppClientId || '',
-        cognitoRegion: (environment as any).cognitoRegion || 'us-east-1',
-        inferenceApiUrl: (environment as any).inferenceApiUrl || 'http://localhost:8001',
+        version: environment.version || 'unknown',
+        oidcAuthorizationUrl: environment.oidcAuthorizationUrl || '',
+        oidcTokenUrl: environment.oidcTokenUrl || '',
+        oidcClientId: environment.oidcClientId || '',
+        oidcScopes: environment.oidcScopes || 'openid profile email',
+        localAuthEnabled: environment.localAuthEnabled ?? true,
       };
       
       console.log('📋 Using fallback configuration from environment.ts');

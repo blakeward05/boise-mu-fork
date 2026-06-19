@@ -43,11 +43,6 @@ export const routes: Routes = [
         canActivate: [adminGuard],
     },
     {
-        path: 'admin/bedrock/models',
-        loadComponent: () => import('./admin/bedrock-models/bedrock-models.page').then(m => m.BedrockModelsPage),
-        canActivate: [adminGuard],
-    },
-    {
         path: 'admin/gemini/models',
         loadComponent: () => import('./admin/gemini-models/gemini-models.page').then(m => m.GeminiModelsPage),
         canActivate: [adminGuard],

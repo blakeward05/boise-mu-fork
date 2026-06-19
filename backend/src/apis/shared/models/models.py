@@ -5,7 +5,7 @@ app API and inference API deployments.
 """
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 
@@ -60,6 +60,21 @@ class ManagedModelCreate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    endpoint_url: Optional[str] = Field(
+        None,
+        alias="endpointUrl",
+        description="Base URL for OpenAI-compatible providers (Ollama, vLLM, Databricks, Azure AI, APIM)."
+    )
+    api_key_env_var: Optional[str] = Field(
+        None,
+        alias="apiKeyEnvVar",
+        description="Name of the environment variable holding the API key for this endpoint."
+    )
+    extra_headers: Optional[Dict[str, str]] = Field(
+        None,
+        alias="extraHeaders",
+        description="Additional HTTP headers (e.g. Ocp-Apim-Subscription-Key for Azure APIM)."
+    )
 
 
 class ManagedModelUpdate(BaseModel):
@@ -112,6 +127,9 @@ class ManagedModelUpdate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions."
     )
+    endpoint_url: Optional[str] = Field(None, alias="endpointUrl")
+    api_key_env_var: Optional[str] = Field(None, alias="apiKeyEnvVar")
+    extra_headers: Optional[Dict[str, str]] = Field(None, alias="extraHeaders")
 
 
 class ManagedModel(BaseModel):
@@ -162,6 +180,21 @@ class ManagedModel(BaseModel):
         False,
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
+    )
+    endpoint_url: Optional[str] = Field(
+        None,
+        alias="endpointUrl",
+        description="Base URL for OpenAI-compatible providers (Ollama, vLLM, Databricks, Azure AI, APIM)."
+    )
+    api_key_env_var: Optional[str] = Field(
+        None,
+        alias="apiKeyEnvVar",
+        description="Name of the environment variable holding the API key for this endpoint."
+    )
+    extra_headers: Optional[Dict[str, str]] = Field(
+        None,
+        alias="extraHeaders",
+        description="Additional HTTP headers (e.g. Ocp-Apim-Subscription-Key for Azure APIM)."
     )
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")

@@ -1,13 +1,10 @@
-"""Document ingestion pipeline for Lambda processing
+"""
+Document ingestion pipeline.
 
-This module is deployed as a standalone Lambda function that processes
-documents uploaded to S3.
+In local mode: documents are ingested in-process via
+apis.app_api.documents.services.ingestion_service.ingest_document(),
+called as a FastAPI BackgroundTask after upload.
 
-Lambda Trigger: S3 event notification on object creation
-Processing Flow:
-1. Extract text from document (PDF, DOCX, TXT, etc.)
-2. Chunk text into semantic segments
-3. Generate embeddings using Bedrock
-4. Store embeddings in S3 vector store
-5. Update document status in DynamoDB
+Processors (Docling, CSV chunker) in processors/ are used by both the
+in-process service and any future cloud ingestion paths.
 """

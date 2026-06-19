@@ -53,40 +53,10 @@ async def list_auth_providers(
 async def get_runtime_image_tag(
     admin_user: User = Depends(require_system_admin),
 ) -> dict:
-    """
-    Get the current container image tag used for AgentCore runtimes.
-    
-    This tag is stored in SSM Parameter Store and is used by the
-    Runtime Provisioner Lambda when creating new runtimes.
-    """
+    """Return the runtime image tag from the RUNTIME_IMAGE_TAG environment variable."""
     import os
-    import boto3
-    from botocore.exceptions import ClientError
-    
-    logger.info("Admin requesting runtime image tag")
-    
-    project_prefix = os.environ.get("PROJECT_PREFIX", "agentcore")
-    param_name = f"/{project_prefix}/inference-api/image-tag"
-    
-    try:
-        ssm = boto3.client("ssm")
-        response = ssm.get_parameter(Name=param_name)
-        image_tag = response["Parameter"]["Value"]
-        
-        return {"image_tag": image_tag}
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "ParameterNotFound":
-            logger.error(f"Image tag parameter not found: {param_name}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Runtime image tag not found in SSM: {param_name}",
-            )
-        else:
-            logger.error(f"Error fetching image tag from SSM: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to fetch runtime image tag",
-            )
+    image_tag = os.environ.get("RUNTIME_IMAGE_TAG", "latest")
+    return {"image_tag": image_tag}
 
 
 @router.post(

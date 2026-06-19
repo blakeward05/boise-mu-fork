@@ -818,7 +818,7 @@ class StreamCoordinator:
         """
         try:
             from apis.app_api.messages.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
-            from apis.app_api.sessions.services.metadata import store_message_metadata
+            from apis.shared.sessions.metadata import store_message_metadata
 
             # Build TokenUsage if we have usage data
             token_usage = None

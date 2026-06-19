@@ -21,7 +21,6 @@ import {
   heroInformationCircle,
 } from '@ng-icons/heroicons/outline';
 import { AuthProvidersService } from '../services/auth-providers.service';
-import { ConfigService } from '../../../services/config.service';
 import {
   AuthProviderCreateRequest,
   AuthProviderUpdateRequest,
@@ -184,34 +183,32 @@ interface ProviderFormGroup {
                 Core OIDC settings. Enter the issuer URL and click Discover to auto-fill endpoints.
               </p>
 
-              <!-- Cognito Redirect URI Helper -->
-              @if (cognitoRedirectUri()) {
-                <div class="mb-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
-                  <div class="flex items-start gap-3">
-                    <ng-icon name="heroInformationCircle" class="mt-0.5 size-5 shrink-0 text-blue-600 dark:text-blue-400" />
-                    <div class="min-w-0 flex-1">
-                      <p class="text-sm/6 font-medium text-blue-800 dark:text-blue-200">
-                        Required: Add this Redirect URI to your identity provider
-                      </p>
-                      <p class="mt-1 text-xs/5 text-blue-700 dark:text-blue-300">
-                        In your IdP's app registration (e.g., Azure Portal, Okta Admin), add the following as an allowed redirect URI:
-                      </p>
-                      <div class="mt-2 flex items-center gap-2">
-                        <code class="block flex-1 truncate rounded-xs bg-blue-100 px-3 py-1.5 font-mono text-sm text-blue-900 dark:bg-blue-800/40 dark:text-blue-100">
-                          {{ cognitoRedirectUri() }}
-                        </code>
-                        <button
-                          type="button"
-                          (click)="copyRedirectUri()"
-                          class="shrink-0 rounded-sm border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-600 dark:bg-blue-800/40 dark:text-blue-200 dark:hover:bg-blue-800/60"
-                        >
-                          {{ copiedRedirectUri() ? 'Copied!' : 'Copy' }}
-                        </button>
-                      </div>
+              <!-- Redirect URI Helper -->
+              <div class="mb-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+                <div class="flex items-start gap-3">
+                  <ng-icon name="heroInformationCircle" class="mt-0.5 size-5 shrink-0 text-blue-600 dark:text-blue-400" />
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm/6 font-medium text-blue-800 dark:text-blue-200">
+                      Required: Add this Redirect URI to your identity provider
+                    </p>
+                    <p class="mt-1 text-xs/5 text-blue-700 dark:text-blue-300">
+                      In your IdP's app registration (e.g., Azure Portal, Okta Admin), add the following as an allowed redirect URI:
+                    </p>
+                    <div class="mt-2 flex items-center gap-2">
+                      <code class="block flex-1 truncate rounded-xs bg-blue-100 px-3 py-1.5 font-mono text-sm text-blue-900 dark:bg-blue-800/40 dark:text-blue-100">
+                        {{ oidcRedirectUri }}
+                      </code>
+                      <button
+                        type="button"
+                        (click)="copyRedirectUri()"
+                        class="shrink-0 rounded-sm border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-600 dark:bg-blue-800/40 dark:text-blue-200 dark:hover:bg-blue-800/60"
+                      >
+                        {{ copiedRedirectUri() ? 'Copied!' : 'Copy' }}
+                      </button>
                     </div>
                   </div>
                 </div>
-              }
+              </div>
 
               <div class="space-y-4">
                 <!-- Issuer URL with Discover -->
@@ -677,7 +674,7 @@ export class AuthProviderFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private authProvidersService = inject(AuthProvidersService);
-  private config = inject(ConfigService);
+
 
   readonly isEditMode = signal(false);
   readonly providerId = signal<string | null>(null);
@@ -688,11 +685,8 @@ export class AuthProviderFormPage implements OnInit {
   readonly discoveryError = signal<string | null>(null);
   readonly copiedRedirectUri = signal(false);
 
-  /** The Cognito redirect URI that must be registered in the external IdP */
-  readonly cognitoRedirectUri = computed(() => {
-    const domain = this.config.cognitoDomainUrl();
-    return domain ? `${domain}/oauth2/idpresponse` : '';
-  });
+  /** The redirect URI to register in the external IdP (always the app's OIDC callback). */
+  readonly oidcRedirectUri = `${window.location.origin}/auth/callback`;
 
   readonly providerForm: FormGroup<ProviderFormGroup> = this.fb.group({
     providerId: this.fb.control('', {
@@ -927,12 +921,9 @@ export class AuthProviderFormPage implements OnInit {
   }
 
   async copyRedirectUri(): Promise<void> {
-    const uri = this.cognitoRedirectUri();
-    if (uri) {
-      await navigator.clipboard.writeText(uri);
-      this.copiedRedirectUri.set(true);
-      setTimeout(() => this.copiedRedirectUri.set(false), 2000);
-    }
+    await navigator.clipboard.writeText(this.oidcRedirectUri);
+    this.copiedRedirectUri.set(true);
+    setTimeout(() => this.copiedRedirectUri.set(false), 2000);
   }
 
   goBack(): void {

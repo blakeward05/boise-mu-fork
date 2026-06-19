@@ -1,32 +1,21 @@
-"""Shared sliding-window rate limiter backed by DynamoDB.
+"""Sliding-window rate limiter backed by MongoDB.
 
-Uses atomic counters on the API keys table to enforce per-key request
-rate limits.  TTL auto-cleans expired window items.
+Uses atomic $inc on a dedicated rate_limit_windows collection to enforce
+per-key request rate limits. TTL index auto-cleans expired window documents.
 
-Fail-open: any DynamoDB error returns *allowed* so a rate-limit outage
-never blocks legitimate traffic.
+Fail-open: any database error returns *allowed* so a DB outage never blocks
+legitimate traffic.
 """
 
 import logging
-import os
 import time
 from typing import Optional
-
-import boto3
-from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Sliding-window rate limiter using DynamoDB atomic counters."""
-
-    def __init__(self, table_name: Optional[str] = None):
-        self.dynamodb = boto3.resource("dynamodb")
-        self.table_name = table_name or os.environ.get(
-            "DYNAMODB_API_KEYS_TABLE_NAME", "ApiKeys"
-        )
-        self.table = self.dynamodb.Table(self.table_name)
+    """Sliding-window rate limiter using MongoDB atomic counters."""
 
     async def check_rate_limit(
         self,
@@ -36,38 +25,39 @@ class RateLimiter:
     ) -> bool:
         """Check whether a request is allowed under the rate limit.
 
-        Stores a counter item per key per time window.  TTL auto-cleans
-        expired windows.  Fail-open: returns ``True`` on any error.
-
-        Returns ``True`` if the request is allowed, ``False`` if rate-limited.
+        Atomically increments a per-key, per-window counter in MongoDB.
+        Returns True if allowed, False if rate-limited.
+        Fail-open: returns True on any error.
         """
-        now = int(time.time())
-        window_key = now // window_seconds
-
         try:
-            resp = self.table.update_item(
-                Key={"PK": f"RATE#{key_id}", "SK": f"WIN#{window_key}"},
-                UpdateExpression=(
-                    "SET #cnt = if_not_exists(#cnt, :zero) + :one, #ttl = :ttl"
-                ),
-                ExpressionAttributeNames={"#cnt": "requestCount", "#ttl": "ttl"},
-                ExpressionAttributeValues={
-                    ":zero": 0,
-                    ":one": 1,
-                    ":ttl": now + (window_seconds * 2),
-                },
-                ReturnValues="UPDATED_NEW",
+            from datetime import datetime, timezone, timedelta
+            from apis.shared.database import get_database, Collections
+
+            now = int(time.time())
+            window_key = now // window_seconds
+            doc_id = f"rl:{key_id}:{window_key}"
+            expires_at = datetime.fromtimestamp(
+                now + window_seconds * 2, tz=timezone.utc
             )
-            count = int(resp["Attributes"]["requestCount"])
+
+            from pymongo import ReturnDocument
+            db = get_database()
+            result = await db[Collections.RATE_LIMIT_WINDOWS].find_one_and_update(
+                {"_id": doc_id},
+                {
+                    "$inc": {"count": 1},
+                    "$setOnInsert": {"expires_at": expires_at},
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+            count = result["count"] if result else 1
             return count <= max_requests
-        except ClientError as exc:
-            logger.warning(f"Rate limit check failed for key {key_id}: {exc}")
+
+        except Exception as exc:
+            logger.warning("Rate limit check failed for key %s: %s", key_id, exc)
             return True  # fail-open
 
-
-# ---------------------------------------------------------------------------
-# Singleton
-# ---------------------------------------------------------------------------
 
 _limiter: Optional[RateLimiter] = None
 

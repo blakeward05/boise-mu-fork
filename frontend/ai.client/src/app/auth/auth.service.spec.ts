@@ -47,9 +47,11 @@ describe('AuthService', () => {
 
     configService = {
       appApiUrl: signal('http://localhost:8000') as any,
-      cognitoDomainUrl: signal('https://myprefix.auth.us-east-1.amazoncognito.com') as any,
-      cognitoAppClientId: signal('test-client-id') as any,
-      cognitoRegion: signal('us-east-1') as any,
+      oidcAuthorizationUrl: signal('https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize') as any,
+      oidcTokenUrl: signal('https://login.microsoftonline.com/tenant/oauth2/v2.0/token') as any,
+      oidcClientId: signal('test-client-id') as any,
+      oidcScopes: signal('openid profile email') as any,
+      localAuthEnabled: signal(true) as any,
     };
 
     TestBed.configureTestingModule({
@@ -202,23 +204,20 @@ describe('AuthService', () => {
     });
   });
 
-  // ─── Login (Cognito OAuth 2.0 + PKCE) ──────────────────────────────
+  // ─── OIDC Login ──────────────────────────────────────────────────────
 
   describe('login', () => {
-    it('should store state and code_verifier in sessionStorage and redirect to Cognito authorize', async () => {
+    it('should store state and code_verifier in sessionStorage and redirect to OIDC authorize', async () => {
       await service.login();
 
-      // State and code verifier should be stored in sessionStorage
       expect(sessionStorageMock.setItem).toHaveBeenCalledWith('auth_state', expect.any(String));
       expect(sessionStorageMock.setItem).toHaveBeenCalledWith('auth_code_verifier', expect.any(String));
 
-      // Should redirect to Cognito authorize endpoint
       const href = window.location.href;
-      expect(href).toContain('https://myprefix.auth.us-east-1.amazoncognito.com/oauth2/authorize');
+      expect(href).toContain('login.microsoftonline.com/tenant/oauth2/v2.0/authorize');
       expect(href).toContain('response_type=code');
       expect(href).toContain('client_id=test-client-id');
       expect(href).toContain('code_challenge_method=S256');
-      expect(href).toContain('scope=openid+profile+email');
     });
 
     it('should include identity_provider param when providerId is given', async () => {
@@ -235,13 +234,67 @@ describe('AuthService', () => {
       const href = window.location.href;
       expect(href).not.toContain('identity_provider');
     });
+
+    it('should throw when OIDC is not configured', async () => {
+      (configService as any).oidcAuthorizationUrl = signal('');
+      service = TestBed.inject(AuthService);
+
+      await expect(service.login()).rejects.toThrow(/OIDC is not configured/);
+    });
+  });
+
+  // ─── Local Login ─────────────────────────────────────────────────────
+
+  describe('localLogin', () => {
+    it('should POST to /auth/local/login and store returned token', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ access_token: 'local-token', token_type: 'bearer' }),
+      }));
+
+      await service.localLogin('user@example.com', 'password123');
+
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/auth/local/login',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: 'user@example.com', password: 'password123' }),
+        })
+      );
+
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('access_token', 'local-token');
+    });
+
+    it('should throw with backend error message on 401', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        json: () => Promise.resolve({ detail: 'Invalid credentials' }),
+      }));
+
+      await expect(service.localLogin('bad@example.com', 'wrong')).rejects.toThrow('Invalid credentials');
+    });
+
+    it('should store token with 8h expiry (28800s)', async () => {
+      const now = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(now);
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ access_token: 'local-token', token_type: 'bearer' }),
+      }));
+
+      await service.localLogin('user@example.com', 'password123');
+
+      const expectedExpiry = (now + 28800 * 1000).toString();
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('token_expiry', expectedExpiry);
+    });
   });
 
   // ─── handleCallback ──────────────────────────────────────────────────
 
   describe('handleCallback', () => {
-    it('should exchange code for tokens via Cognito token endpoint', async () => {
-      // Set up stored state and code verifier
+    it('should exchange code for tokens via OIDC token endpoint', async () => {
       sessionStore['auth_state'] = 'test-state';
       sessionStore['auth_code_verifier'] = 'test-verifier';
 
@@ -260,20 +313,16 @@ describe('AuthService', () => {
 
       await service.handleCallback('auth-code-123', 'test-state');
 
-      // Verify fetch was called with correct Cognito token endpoint
       expect(fetch).toHaveBeenCalledWith(
-        'https://myprefix.auth.us-east-1.amazoncognito.com/oauth2/token',
+        'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         })
       );
 
-      // Verify tokens were stored
       expect(localStorageMock.setItem).toHaveBeenCalledWith('access_token', 'new-access-token');
       expect(localStorageMock.setItem).toHaveBeenCalledWith('refresh_token', 'new-refresh-token');
-
-      // Verify session storage was cleaned up
       expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('auth_state');
       expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('auth_code_verifier');
     });
@@ -287,7 +336,6 @@ describe('AuthService', () => {
 
     it('should throw when no code verifier is found', async () => {
       sessionStore['auth_state'] = 'test-state';
-      // No code verifier stored
 
       await expect(service.handleCallback('code', 'test-state'))
         .rejects.toThrow(/No code verifier found/);
@@ -310,7 +358,7 @@ describe('AuthService', () => {
   // ─── refreshAccessToken ─────────────────────────────────────────────
 
   describe('refreshAccessToken', () => {
-    it('should refresh tokens via Cognito token endpoint', async () => {
+    it('should refresh tokens via OIDC token endpoint', async () => {
       store['refresh_token'] = 'my-refresh-token';
 
       const mockResponse: TokenRefreshResponse = {
@@ -328,7 +376,7 @@ describe('AuthService', () => {
       const result = await service.refreshAccessToken();
 
       expect(fetch).toHaveBeenCalledWith(
-        'https://myprefix.auth.us-east-1.amazoncognito.com/oauth2/token',
+        'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -343,7 +391,15 @@ describe('AuthService', () => {
       await expect(service.refreshAccessToken()).rejects.toThrow(/No refresh token available/);
     });
 
-    it('should clear tokens on 400/401 from Cognito', async () => {
+    it('should throw when OIDC token URL is not configured', async () => {
+      store['refresh_token'] = 'my-refresh';
+      (configService as any).oidcTokenUrl = signal('');
+      service = TestBed.inject(AuthService);
+
+      await expect(service.refreshAccessToken()).rejects.toThrow(/not configured/);
+    });
+
+    it('should clear tokens on 400/401 from token endpoint', async () => {
       store['refresh_token'] = 'bad-refresh';
 
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -357,7 +413,7 @@ describe('AuthService', () => {
       expect(localStorageMock.removeItem).toHaveBeenCalledWith('refresh_token');
     });
 
-    it('should NOT clear tokens on 500 from Cognito', async () => {
+    it('should NOT clear tokens on 500 from token endpoint', async () => {
       store['refresh_token'] = 'my-refresh';
       localStorageMock.removeItem.mockClear();
 
@@ -432,7 +488,7 @@ describe('AuthService', () => {
   // ─── Logout ─────────────────────────────────────────────────────────
 
   describe('logout', () => {
-    it('should clear tokens and redirect to Cognito logout endpoint', async () => {
+    it('should clear tokens and redirect to /', async () => {
       store['access_token'] = 'token';
       store['refresh_token'] = 'refresh';
 
@@ -442,24 +498,33 @@ describe('AuthService', () => {
       expect(localStorageMock.removeItem).toHaveBeenCalledWith('refresh_token');
       expect(localStorageMock.removeItem).toHaveBeenCalledWith('token_expiry');
       expect(localStorageMock.removeItem).toHaveBeenCalledWith('auth_provider_id');
+      expect(window.location.href).toBe('/');
+    });
+  });
 
-      const href = window.location.href;
-      expect(href).toContain('https://myprefix.auth.us-east-1.amazoncognito.com/logout');
-      expect(href).toContain('client_id=test-client-id');
-      expect(href).toContain('logout_uri=');
+  // ─── Computed Signals ────────────────────────────────────────────────
+
+  describe('isOidcConfigured', () => {
+    it('should return true when oidcClientId is set', () => {
+      expect(service.isOidcConfigured()).toBe(true);
     });
 
-    it('should redirect to / when Cognito config is not available', async () => {
-      // Override config to return empty values
-      (configService as any).cognitoDomainUrl = signal('');
-      (configService as any).cognitoAppClientId = signal('');
-
-      // Re-create service with empty config
+    it('should return false when oidcClientId is empty', () => {
+      (configService as any).oidcClientId = signal('');
       service = TestBed.inject(AuthService);
+      expect(service.isOidcConfigured()).toBe(false);
+    });
+  });
 
-      await service.logout();
+  describe('isLocalAuthEnabled', () => {
+    it('should return true when localAuthEnabled is true', () => {
+      expect(service.isLocalAuthEnabled()).toBe(true);
+    });
 
-      expect(window.location.href).toBe('/');
+    it('should return false when localAuthEnabled is false', () => {
+      (configService as any).localAuthEnabled = signal(false);
+      service = TestBed.inject(AuthService);
+      expect(service.isLocalAuthEnabled()).toBe(false);
     });
   });
 

@@ -23,7 +23,6 @@ describe('UserService', () => {
     return `${headerB64}.${payloadB64}.sig`;
   };
 
-  // ID token payload (has email, name, cognito:groups)
   const testPayload = {
     sub: 'user-123',
     email: 'test@example.com',
@@ -90,7 +89,6 @@ describe('UserService', () => {
         fullName: 'Test User',
         roles: ['Admin'],
         picture: 'https://example.com/pic.jpg',
-        providerSub: '',
       });
     });
   });

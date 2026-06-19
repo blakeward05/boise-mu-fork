@@ -8,12 +8,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query, status
 from typing import Optional
 import logging
 import os
-import boto3
-from botocore.exceptions import ClientError, BotoCoreError
 
 from .models import (
-    BedrockModelsResponse,
-    FoundationModelSummary,
     GeminiModelsResponse,
     GeminiModelSummary,
     OpenAIModelsResponse,
@@ -43,128 +39,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 
-
-
-@router.get("/bedrock/models", response_model=BedrockModelsResponse)
-async def list_bedrock_models(
-    by_provider: Optional[str] = Query(None, description="Filter by provider name (e.g., 'Anthropic', 'Amazon')"),
-    by_output_modality: Optional[str] = Query(None, description="Filter by output modality (e.g., 'TEXT', 'IMAGE')"),
-    by_inference_type: Optional[str] = Query(None, description="Filter by inference type (e.g., 'ON_DEMAND', 'PROVISIONED')"),
-    by_customization_type: Optional[str] = Query(None, description="Filter by customization type (e.g., 'FINE_TUNING', 'CONTINUED_PRE_TRAINING')"),
-    max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return (client-side limit)"),
-    admin_user: User = Depends(require_admin),
-):
-    """
-    List available AWS Bedrock foundation models (admin only).
-
-    This endpoint queries AWS Bedrock to retrieve information about available
-    foundation models, including their capabilities, providers, and configurations.
-
-    Note: The AWS Bedrock API doesn't support pagination or maxResults parameters.
-    All filtering is done server-side via query parameters. Client-side limiting
-    can be applied using the max_results parameter.
-
-    Args:
-        by_provider: Optional filter by provider name
-        by_output_modality: Optional filter by output modality
-        by_inference_type: Optional filter by inference type
-        by_customization_type: Optional filter by customization type
-        max_results: Optional client-side limit on number of models to return
-        admin_user: Authenticated admin user (injected by dependency)
-
-    Returns:
-        BedrockModelsResponse with list of foundation models
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 403 if user lacks admin role
-            - 500 if AWS API error or server error
-    """
-    logger.info("Admin listing Bedrock foundation models")
-
-    try:
-        # Initialize Bedrock control plane client (not bedrock-runtime)
-        bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
-        bedrock_client = boto3.client('bedrock', region_name=bedrock_region)
-
-        # Build request parameters (only supported parameters)
-        request_params = {}
-
-        # Add optional filters (only these are supported by the API)
-        if by_provider:
-            request_params['byProvider'] = by_provider
-        if by_output_modality:
-            request_params['byOutputModality'] = by_output_modality
-        if by_inference_type:
-            request_params['byInferenceType'] = by_inference_type
-        if by_customization_type:
-            request_params['byCustomizationType'] = by_customization_type
-
-        # Call AWS Bedrock API
-        logger.debug("Calling list_foundation_models")
-        response = bedrock_client.list_foundation_models(**request_params)
-
-        # Transform AWS response to our response model
-        all_models = response.get('modelSummaries', [])
-        
-        # Apply client-side limiting if requested
-        if max_results and len(all_models) > max_results:
-            all_models = all_models[:max_results]
-            logger.debug("Limited results to max_results models (client-side)")
-
-        model_summaries = []
-        for model in all_models:
-            # Extract modelLifecycle status - it can be a dict with 'status' key or a string
-            model_lifecycle = model.get('modelLifecycle')
-            if isinstance(model_lifecycle, dict):
-                model_lifecycle = model_lifecycle.get('status')
-
-            model_summaries.append(
-                FoundationModelSummary(
-                    modelId=model.get('modelId', ''),
-                    modelName=model.get('modelName', ''),
-                    providerName=model.get('providerName', ''),
-                    inputModalities=model.get('inputModalities', []),
-                    outputModalities=model.get('outputModalities', []),
-                    responseStreamingSupported=model.get('responseStreamingSupported', False),
-                    customizationsSupported=model.get('customizationsSupported', []),
-                    inferenceTypesSupported=model.get('inferenceTypesSupported', []),
-                    modelLifecycle=model_lifecycle,
-                )
-            )
-
-        # Sort models by ID in reverse order (newest versions typically have higher version numbers/dates)
-        model_summaries.sort(key=lambda m: m.model_id, reverse=True)
-
-        logger.info("✅ Retrieved Bedrock foundation models")
-
-        return BedrockModelsResponse(
-            models=model_summaries,
-            nextToken=None,  # API doesn't support pagination
-            totalCount=len(model_summaries),
-        )
-
-    except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-        error_message = e.response.get('Error', {}).get('Message', str(e))
-        logger.error("AWS Bedrock API error", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AWS Bedrock API error: {error_code} - {error_message}"
-        )
-    except BotoCoreError as e:
-        logger.error("Boto3 error calling Bedrock API", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error connecting to AWS Bedrock: {str(e)}"
-        )
-    except Exception as e:
-        logger.error("Unexpected error listing Bedrock models", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
-        )
 
 
 @router.get("/gemini/models", response_model=GeminiModelsResponse)

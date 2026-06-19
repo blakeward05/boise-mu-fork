@@ -12,11 +12,10 @@ export class CallbackService {
   private sessionService = inject(SessionService);
 
   /**
-   * Exchange authorization code for tokens via Cognito token endpoint.
+   * Exchange authorization code for tokens via the configured OIDC token endpoint.
    * Delegates to AuthService.handleCallback() for the actual token exchange.
    */
   async exchangeCodeForTokens(code: string, state: string): Promise<void> {
-    // Exchange code for tokens directly with Cognito via AuthService
     await this.authService.handleCallback(code, state);
 
     // Refresh user data from new token

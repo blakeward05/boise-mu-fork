@@ -106,10 +106,8 @@ export class UserService {
       }
 
       // Build full name from available claims
-      // ID tokens have name/given_name/family_name; Cognito tokens have cognito:username
       const fullName = jwtPayload.name ||
         `${jwtPayload.given_name || ''} ${jwtPayload.family_name || ''}`.trim() ||
-        jwtPayload['cognito:username'] ||
         email;
 
       // Extract first and last name - prefer JWT claims, fall back to parsing fullName
@@ -123,11 +121,7 @@ export class UserService {
         lastName = nameParts.slice(1).join(' ') || '';
       }
 
-      // Extract roles using shared parser (handles JSON arrays, comma-separated, fallbacks)
       const roles = parseRolesFromToken(jwtPayload);
-
-      // Extract IdP user identifier (mapped via custom:provider_sub)
-      const providerSub = jwtPayload['custom:provider_sub'] || '';
 
       const user: User = {
         email,
@@ -137,7 +131,6 @@ export class UserService {
         fullName,
         roles,
         picture: jwtPayload.picture,
-        providerSub,
       };
 
       return user;
@@ -235,7 +228,6 @@ export class UserService {
           name: user.fullName,
           picture: user.picture || null,
           roles: user.roles || [],
-          provider_sub: user.providerSub || null,
         })
       );
     } catch (error) {

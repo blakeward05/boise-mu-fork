@@ -1,5 +1,10 @@
 """
-Session manager factory for creating AgentCore Memory session managers
+Session manager factory — selects between MongoDB and AgentCore Memory backends.
+
+Priority:
+  1. Preview sessions  → PreviewSessionManager (in-memory, no persistence)
+  2. DATABASE_URL set  → MongoSessionManager (local MongoDB / Azure Cosmos DB)
+  3. Fallback          → TurnBasedSessionManager (AWS Bedrock AgentCore Memory)
 """
 import os
 import logging
@@ -102,6 +107,15 @@ class SessionFactory:
             logger.info("🔍 Preview session detected")
             return PreviewSessionManager(session_id=session_id, user_id=user_id)
 
+        # MongoDB mode — takes precedence over AgentCore when DATABASE_URL is set
+        if os.environ.get("DATABASE_URL"):
+            return SessionFactory._create_mongo_session_manager(
+                session_id=session_id,
+                user_id=user_id,
+                compaction_enabled=compaction_enabled,
+                compaction_threshold=compaction_threshold,
+            )
+
         if not AGENTCORE_MEMORY_AVAILABLE:
             raise RuntimeError(
                 "bedrock_agentcore package is required. "
@@ -119,6 +133,37 @@ class SessionFactory:
             caching_enabled=caching_enabled,
             compaction_enabled=compaction_enabled,
             compaction_threshold=compaction_threshold,
+        )
+
+    @staticmethod
+    def _create_mongo_session_manager(
+        session_id: str,
+        user_id: str,
+        compaction_enabled: Optional[bool] = None,
+        compaction_threshold: Optional[int] = None,
+    ) -> Any:
+        """Create a MongoSessionManager backed by MongoDB / Azure Cosmos DB."""
+        from agents.main_agent.session.mongo_session_manager import MongoSessionManager
+
+        compaction_config = CompactionConfig.from_env()
+        if compaction_enabled is not None:
+            compaction_config.enabled = compaction_enabled
+        if compaction_threshold is not None:
+            compaction_config.token_threshold = compaction_threshold
+
+        db_name = os.environ.get("DATABASE_NAME", "boise")
+        logger.info("🗄️  MongoDB mode: Using MongoSessionManager")
+        logger.info("   • Database: %s", db_name)
+        logger.info(
+            "   • Compaction: %s (threshold=%s)",
+            "Enabled" if compaction_config.enabled else "Disabled",
+            f"{compaction_config.token_threshold:,}" if compaction_config.enabled else "N/A",
+        )
+
+        return MongoSessionManager(
+            session_id=session_id,
+            user_id=user_id,
+            compaction_config=compaction_config if compaction_config.enabled else None,
         )
 
     @staticmethod

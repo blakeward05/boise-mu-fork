@@ -10,6 +10,11 @@ export interface TokenRefreshResponse {
   scope?: string;
 }
 
+interface LocalLoginApiResponse {
+  access_token: string;
+  token_type: string;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -24,22 +29,23 @@ export class AuthService {
   private readonly returnUrlKey = 'auth_return_url';
   private readonly providerIdKey = 'auth_provider_id';
 
-  // Cognito endpoints derived from runtime config
-  private readonly cognitoDomain = computed(() => this.config.cognitoDomainUrl());
-  private readonly cognitoClientId = computed(() => this.config.cognitoAppClientId());
+  // OIDC endpoints from runtime config
+  private readonly oidcAuthorizationUrl = computed(() => this.config.oidcAuthorizationUrl());
+  private readonly oidcTokenUrl = computed(() => this.config.oidcTokenUrl());
+  private readonly oidcClientId = computed(() => this.config.oidcClientId());
+  private readonly oidcScopes = computed(() => this.config.oidcScopes() || 'openid profile email');
+
+  /** True when OIDC SSO is configured (oidcClientId is set in runtime config). */
+  readonly isOidcConfigured = computed(() => !!this.config.oidcClientId());
+
+  /** True when local username/password auth is enabled. */
+  readonly isLocalAuthEnabled = computed(() => this.config.localAuthEnabled());
 
   private get redirectUri(): string {
     return `${window.location.origin}/auth/callback`;
   }
 
-  private get logoutUri(): string {
-    return window.location.origin;
-  }
-
-  /**
-   * Signal tracking the current authentication provider ID.
-   * Used for display purposes and tracking which provider the user authenticated with.
-   */
+  /** Signal tracking the current authentication provider ID. */
   readonly currentProviderId = signal<string | null>(null);
 
   constructor() {
@@ -132,57 +138,82 @@ export class AuthService {
       .replace(/=+$/, '');
   }
 
-  // ─── Login ───────────────────────────────────────────────────────────
+  // ─── OIDC Login ──────────────────────────────────────────────────────
 
   /**
-   * Initiates the Cognito OAuth 2.0 login flow with PKCE.
-   * Redirects the user to the Cognito authorize endpoint.
+   * Initiates the OIDC OAuth 2.0 authorization code flow with PKCE.
+   * Redirects to the configured OIDC provider (e.g. Azure Entra).
    *
-   * @param providerId Optional Cognito identity provider name for federated login
+   * @param providerId Optional identity provider hint passed as `identity_provider`
    */
   async login(providerId?: string): Promise<void> {
+    const authUrl = this.oidcAuthorizationUrl();
+    if (!authUrl) {
+      throw new Error('OIDC is not configured. Use local login instead.');
+    }
+
     const state = this.generateRandomState();
     const codeVerifier = this.generateCodeVerifier();
     const codeChallenge = await this.generateCodeChallenge(codeVerifier);
 
-    // Store PKCE and state values in sessionStorage
     sessionStorage.setItem(this.stateKey, state);
     sessionStorage.setItem(this.codeVerifierKey, codeVerifier);
 
-    // Store provider ID in localStorage for display purposes
     if (providerId) {
       localStorage.setItem(this.providerIdKey, providerId);
     }
 
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: this.cognitoClientId(),
+      client_id: this.oidcClientId(),
       redirect_uri: this.redirectUri,
-      scope: 'openid profile email',
+      scope: this.oidcScopes(),
       state,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
     });
 
-    // If a specific federated provider is selected, add identity_provider param
     if (providerId) {
       params.set('identity_provider', providerId);
     }
 
-    window.location.href = `${this.cognitoDomain()}/oauth2/authorize?${params}`;
+    window.location.href = `${authUrl}?${params}`;
+  }
+
+  // ─── Local Login ──────────────────────────────────────────────────────
+
+  /**
+   * Authenticates using local username/password via POST /auth/local/login.
+   * Stores the returned token exactly like an OIDC token (same storage keys).
+   * Local tokens expire in 8 hours (backend default).
+   */
+  async localLogin(email: string, password: string): Promise<void> {
+    const appApiUrl = this.config.appApiUrl();
+    const response = await fetch(`${appApiUrl}/auth/local/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({ detail: 'Login failed' }));
+      throw new Error(errorBody.detail || 'Invalid email or password');
+    }
+
+    const data: LocalLoginApiResponse = await response.json();
+    if (!data.access_token) {
+      throw new Error('Invalid response from auth server');
+    }
+
+    this.storeTokens({ access_token: data.access_token, expires_in: 28800 });
   }
 
   // ─── Callback / Token Exchange ──────────────────────────────────────
 
   /**
-   * Handles the OAuth 2.0 callback by exchanging the authorization code
-   * for Cognito tokens directly via the Cognito token endpoint.
-   *
-   * @param code Authorization code from Cognito
-   * @param state State parameter for CSRF verification
+   * Exchanges an OIDC authorization code for tokens via the configured token endpoint.
    */
   async handleCallback(code: string, state: string): Promise<void> {
-    // Verify state matches for CSRF protection
     const storedState = sessionStorage.getItem(this.stateKey);
     if (state !== storedState) {
       this.clearStoredState();
@@ -195,13 +226,18 @@ export class AuthService {
       throw new Error('No code verifier found. Please initiate login again.');
     }
 
-    // Exchange code for tokens directly with Cognito
-    const response = await fetch(`${this.cognitoDomain()}/oauth2/token`, {
+    const tokenUrl = this.oidcTokenUrl();
+    if (!tokenUrl) {
+      this.clearStoredState();
+      throw new Error('OIDC token endpoint not configured.');
+    }
+
+    const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
-        client_id: this.cognitoClientId(),
+        client_id: this.oidcClientId(),
         code,
         redirect_uri: this.redirectUri,
         code_verifier: codeVerifier,
@@ -218,13 +254,10 @@ export class AuthService {
 
     if (!tokens || !tokens.access_token) {
       this.clearStoredState();
-      throw new Error('Invalid token response from Cognito');
+      throw new Error('Invalid token response from OIDC provider');
     }
 
-    // Store tokens
     this.storeTokens(tokens);
-
-    // Clean up session storage
     this.clearStoredState();
     sessionStorage.removeItem(this.codeVerifierKey);
   }
@@ -232,7 +265,9 @@ export class AuthService {
   // ─── Token Refresh ───────────────────────────────────────────────────
 
   /**
-   * Refresh the access token using the refresh token via the Cognito token endpoint.
+   * Refresh the access token using the refresh token via the OIDC token endpoint.
+   * Local-auth tokens (HS256, no refresh token) cannot be refreshed this way;
+   * the user will be prompted to re-authenticate when the token expires.
    */
   async refreshAccessToken(): Promise<TokenRefreshResponse> {
     const refreshToken = this.getRefreshToken();
@@ -240,40 +275,37 @@ export class AuthService {
       throw new Error('No refresh token available');
     }
 
-    try {
-      const response = await fetch(`${this.cognitoDomain()}/oauth2/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          client_id: this.cognitoClientId(),
-          refresh_token: refreshToken,
-        }),
-      });
-
-      if (!response.ok) {
-        // On 400/401 from Cognito, the refresh token is invalid — clear tokens
-        if (response.status === 400 || response.status === 401) {
-          this.clearTokens();
-        }
-        const errorBody = await response.text();
-        throw new Error(`Token refresh failed: ${errorBody}`);
-      }
-
-      const tokens: TokenRefreshResponse = await response.json();
-
-      if (!tokens || !tokens.access_token) {
-        throw new Error('Invalid token refresh response');
-      }
-
-      // Store the new tokens (Cognito refresh_token grant doesn't return a new refresh_token,
-      // so we preserve the existing one)
-      this.storeTokens(tokens);
-
-      return tokens;
-    } catch (error) {
-      throw error;
+    const tokenUrl = this.oidcTokenUrl();
+    if (!tokenUrl) {
+      throw new Error('OIDC token endpoint not configured. Re-authentication required.');
     }
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: this.oidcClientId(),
+        refresh_token: refreshToken,
+      }),
+    });
+
+    if (!response.ok) {
+      if (response.status === 400 || response.status === 401) {
+        this.clearTokens();
+      }
+      const errorBody = await response.text();
+      throw new Error(`Token refresh failed: ${errorBody}`);
+    }
+
+    const tokens: TokenRefreshResponse = await response.json();
+
+    if (!tokens || !tokens.access_token) {
+      throw new Error('Invalid token refresh response');
+    }
+
+    this.storeTokens(tokens);
+    return tokens;
   }
 
   // ─── Token Storage ──────────────────────────────────────────────────
@@ -420,26 +452,12 @@ export class AuthService {
   // ─── Logout ─────────────────────────────────────────────────────────
 
   /**
-   * Logs the user out by clearing local tokens and redirecting to the
-   * Cognito logout endpoint.
+   * Clears local tokens and navigates to the home page.
+   * For OIDC providers that require a server-side logout, configure the
+   * post-logout redirect via the provider's app registration.
    */
   async logout(): Promise<void> {
-    // Clear local tokens first
     this.clearTokens();
-
-    const cognitoDomain = this.cognitoDomain();
-    const clientId = this.cognitoClientId();
-
-    if (cognitoDomain && clientId) {
-      // Redirect to Cognito logout endpoint
-      const params = new URLSearchParams({
-        client_id: clientId,
-        logout_uri: this.logoutUri,
-      });
-      window.location.href = `${cognitoDomain}/logout?${params}`;
-    } else {
-      // Fallback: redirect to home if Cognito config not available
-      window.location.href = '/';
-    }
+    window.location.href = '/';
   }
 }
