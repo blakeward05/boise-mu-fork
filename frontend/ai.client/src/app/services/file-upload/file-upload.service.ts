@@ -395,55 +395,43 @@ export class FileUploadService {
   }
 
   /**
-   * Upload file content directly to S3 via pre-signed URL.
+   * Upload file content directly to the upload URL with progress tracking.
+   * The upload_id in the URL is the credential (presigned-URL pattern — no auth header needed).
    */
   private async uploadToS3(presignedUrl: string, file: File, uploadId: string): Promise<void> {
-    try {
-      // Use XMLHttpRequest for progress tracking
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
 
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const progress = Math.round((event.loaded / event.total) * 100);
-            const current = this._pendingUploads().get(uploadId);
-            if (current) {
-              this.updatePendingUpload(uploadId, { ...current, progress });
-            }
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          const current = this._pendingUploads().get(uploadId);
+          if (current) {
+            this.updatePendingUpload(uploadId, { ...current, progress });
           }
-        };
+        }
+      };
 
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            reject(new FileUploadError(
-              `S3 upload failed: ${xhr.status} ${xhr.statusText}`,
-              'S3_UPLOAD_FAILED',
-              { status: xhr.status }
-            ));
-          }
-        };
-
-        xhr.onerror = () => {
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
           reject(new FileUploadError(
-            'Network error during S3 upload',
-            'NETWORK_ERROR'
+            `Upload failed: ${xhr.status} ${xhr.statusText}`,
+            'UPLOAD_FAILED',
+            { status: xhr.status }
           ));
-        };
+        }
+      };
 
-        xhr.open('PUT', presignedUrl);
-        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-        xhr.send(file);
-      });
-    } catch (err) {
-      if (err instanceof FileUploadError) throw err;
-      throw new FileUploadError(
-        'Failed to upload to S3',
-        'S3_UPLOAD_FAILED',
-        { originalError: String(err) }
-      );
-    }
+      xhr.onerror = () => {
+        reject(new FileUploadError('Network error during upload', 'NETWORK_ERROR'));
+      };
+
+      xhr.open('PUT', presignedUrl);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      xhr.send(file);
+    });
   }
 
   /**

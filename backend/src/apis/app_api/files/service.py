@@ -189,6 +189,9 @@ class FileUploadService:
     async def get_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
         return await self.repository.get_file(user_id, upload_id)
 
+    async def get_file_by_upload_id(self, upload_id: str) -> Optional[FileMetadata]:
+        return await self.repository.get_file_by_upload_id(upload_id)
+
     async def delete_file(self, user_id: str, upload_id: str) -> bool:
         file_meta = await self.repository.get_file(user_id, upload_id)
         if not file_meta:

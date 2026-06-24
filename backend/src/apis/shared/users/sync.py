@@ -22,8 +22,7 @@ class UserSyncService:
 
     @property
     def enabled(self) -> bool:
-        """Check if sync is enabled (repository is configured)."""
-        return self._repository.enabled
+        return True
 
     async def sync_from_jwt(self, jwt_claims: dict) -> Tuple[Optional[UserProfile], bool]:
         """

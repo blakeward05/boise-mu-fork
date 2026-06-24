@@ -6,7 +6,9 @@ Supported providers:
   openai           – OpenAI (api.openai.com)
   gemini           – Google Gemini
   openai-compatible – Any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, LocalAI)
-  databricks       – Databricks Model Serving (OpenAI-compatible)
+  databricks       – Databricks Model Serving (OpenAI-compatible); endpoint_url must end
+                     with /serving-endpoints (e.g. https://<workspace>.azuredatabricks.net/serving-endpoints)
+                     and model_id must be the endpoint name — the SDK appends /v1/chat/completions
   azure-ai         – Azure AI Foundry (OpenAI-compatible)
   azure-apim       – Azure APIM gateway (OpenAI-compatible, subscription key auth)
 """
@@ -100,6 +102,8 @@ class ModelConfig:
     endpoint_url: Optional[str] = None
     api_key: Optional[str] = None          # Already-resolved key (not env var name)
     extra_headers: Optional[Dict[str, str]] = field(default=None)
+    databricks_use_invocations: bool = False  # True = custom serving endpoint (/invocations), False = foundation model
+    databricks_responses_api: bool = False    # True = Responses API format (input/output), False = Chat Completions (messages/choices)
 
     def get_provider(self) -> ModelProvider:
         """Detect provider from model_id if not explicitly set."""
@@ -205,6 +209,8 @@ class ModelConfig:
         endpoint_url: Optional[str] = None,
         api_key: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        databricks_use_invocations: bool = False,
+        databricks_responses_api: bool = False,
     ) -> "ModelConfig":
         """Create ModelConfig from optional parameters with defaults applied."""
         provider_enum = ModelProvider.BEDROCK
@@ -223,4 +229,6 @@ class ModelConfig:
             endpoint_url=endpoint_url,
             api_key=api_key,
             extra_headers=extra_headers,
+            databricks_use_invocations=databricks_use_invocations,
+            databricks_responses_api=databricks_responses_api,
         )

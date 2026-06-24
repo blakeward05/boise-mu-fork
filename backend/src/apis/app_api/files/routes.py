@@ -108,20 +108,18 @@ async def request_presigned_url(
 async def upload_file_content(
     upload_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
     Receive raw file bytes for a pending upload (local storage only).
 
-    Used when LocalFileStorage is active: the presign endpoint returns a URL
-    pointing here instead of an S3 presigned URL. The client PUTs the file
-    body directly. After this call succeeds, the client should still call
-    POST /{upload_id}/complete to mark the upload as ready.
+    No auth required — the upload_id is a secure random token issued to an
+    authenticated user via POST /presign, just like an S3 presigned URL.
+    After this call succeeds the client must call POST /{upload_id}/complete.
     """
     from apis.shared.storage import get_file_storage
 
-    file_meta = await service.get_file(user.user_id, upload_id)
+    file_meta = await service.get_file_by_upload_id(upload_id)
     if not file_meta:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1,5 +1,5 @@
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { AuthService } from '../../../auth/auth.service';
@@ -329,7 +329,15 @@ export class SessionService {
       // Ensure user is authenticated before making the request
       await this.authService.ensureAuthenticated();
 
-      return this.getSessionMetadata(sessionId);
+      try {
+        return await this.getSessionMetadata(sessionId);
+      } catch (err) {
+        // Session not found in DB (stale ID, wiped DB, etc.) — treat as no session
+        if (err instanceof HttpErrorResponse && err.status === 404) {
+          return null;
+        }
+        throw err;
+      }
     }
   });
 

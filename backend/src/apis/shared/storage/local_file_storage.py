@@ -50,7 +50,7 @@ class LocalFileStorage(FileStorage):
         expires_in: int = 900,
     ) -> str:
         """Return a PUT URL pointing at the local upload endpoint."""
-        return f"{self._app_url}/api/files/{upload_id}/content"
+        return f"{self._app_url}/files/{upload_id}/content"
 
     async def read(self, key: str) -> bytes:
         path = self._full_path(key)

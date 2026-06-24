@@ -63,7 +63,7 @@ async def sync_my_profile(
     lacks. This keeps the Users table current so the backend can resolve
     email for features like assistant sharing and fine-tuning access.
     """
-    if not user_repo.enabled:
+    if user_repo is None:
         return
 
     email = body.email.strip().lower()

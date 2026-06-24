@@ -27,6 +27,7 @@ from apis.shared.sessions.messages import get_messages
 from apis.shared.models.managed_models import (
     create_managed_model,
     get_managed_model,
+    get_managed_model_by_internal_id,
     list_managed_models,
     update_managed_model,
     delete_managed_model,
@@ -273,7 +274,7 @@ async def list_managed_models_endpoint(
     logger.info("Admin listing all enabled models")
 
     try:
-        models = await list_managed_models(user_roles=None)  # None = no role filtering
+        models = await list_managed_models(enabled_only=False)
 
         # Convert ManagedModel instances to dicts for Pydantic v2 validation
         models_dict = [model.model_dump(by_alias=True) for model in models]
@@ -362,7 +363,7 @@ async def get_managed_model_endpoint(
     logger.info("Admin requesting enabled model")
 
     try:
-        model = await get_managed_model(model_id)
+        model = await get_managed_model_by_internal_id(model_id)
 
         if not model:
             raise HTTPException(
@@ -412,7 +413,13 @@ async def update_managed_model_endpoint(
     logger.info("Admin updating enabled model")
 
     try:
-        model = await update_managed_model(model_id, updates)
+        existing = await get_managed_model_by_internal_id(model_id)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+        model = await update_managed_model(existing.model_id, updates)
 
         if not model:
             raise HTTPException(
@@ -463,7 +470,13 @@ async def delete_managed_model_endpoint(
     logger.info("Admin deleting enabled model")
 
     try:
-        deleted = await delete_managed_model(model_id)
+        existing = await get_managed_model_by_internal_id(model_id)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+        deleted = await delete_managed_model(existing.model_id)
 
         if not deleted:
             raise HTTPException(

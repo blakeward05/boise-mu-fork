@@ -90,6 +90,10 @@ export interface ManagedModel {
   endpointUrl?: string | null;
   /** Environment variable name holding the API key for this provider */
   apiKeyEnvVar?: string | null;
+  /** True for custom serving endpoints that use /invocations path */
+  databricksUseInvocations?: boolean;
+  /** True when the endpoint uses Responses API format (input/output) instead of Chat Completions (messages/choices) */
+  databricksResponsesApi?: boolean;
   /** Date the model was added to the system (ISO string from API) */
   createdAt?: string | Date;
   /** Date the model was last updated (ISO string from API) */
@@ -146,6 +150,10 @@ export interface ManagedModelFormData {
   endpointUrl?: string | null;
   /** Environment variable name holding the API key */
   apiKeyEnvVar?: string | null;
+  /** True for custom serving endpoints that use /invocations path */
+  databricksUseInvocations?: boolean;
+  /** True when the endpoint uses Responses API format (input/output) instead of Chat Completions (messages/choices) */
+  databricksResponsesApi?: boolean;
 }
 
 /**

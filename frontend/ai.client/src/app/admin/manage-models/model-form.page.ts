@@ -14,6 +14,8 @@ interface ModelFormGroup {
   providerName: FormControl<string>;
   endpointUrl: FormControl<string | null>;
   apiKeyEnvVar: FormControl<string | null>;
+  databricksUseInvocations: FormControl<boolean>;
+  databricksResponsesApi: FormControl<boolean>;
   inputModalities: FormControl<string[]>;
   outputModalities: FormControl<string[]>;
   maxInputTokens: FormControl<number>;
@@ -73,6 +75,8 @@ export class ModelFormPage implements OnInit {
     providerName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     endpointUrl: this.fb.control<string | null>(null),
     apiKeyEnvVar: this.fb.control<string | null>(null),
+    databricksUseInvocations: this.fb.control(false, { nonNullable: true }),
+    databricksResponsesApi: this.fb.control(false, { nonNullable: true }),
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     outputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     maxInputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
@@ -137,6 +141,8 @@ export class ModelFormPage implements OnInit {
         maxOutputTokens: model.maxOutputTokens,
         endpointUrl: model.endpointUrl ?? null,
         apiKeyEnvVar: model.apiKeyEnvVar ?? null,
+        databricksUseInvocations: model.databricksUseInvocations ?? false,
+        databricksResponsesApi: model.databricksResponsesApi ?? false,
         allowedAppRoles: model.allowedAppRoles ?? [],
         availableToRoles: model.availableToRoles ?? [],
         enabled: model.enabled,

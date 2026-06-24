@@ -138,17 +138,27 @@ class AppRoleService:
         all_models: Set[str] = set()
 
         for role in roles:
-            if role.effective_permissions:
-                # Handle wildcard
-                if "*" in role.effective_permissions.tools:
-                    all_tools.add("*")
-                else:
-                    all_tools.update(role.effective_permissions.tools)
+            # Prefer effective_permissions (denormalized); fall back to granted_* fields
+            eff_tools = (
+                role.effective_permissions.tools
+                if role.effective_permissions and role.effective_permissions.tools
+                else role.granted_tools or []
+            )
+            eff_models = (
+                role.effective_permissions.models
+                if role.effective_permissions and role.effective_permissions.models
+                else role.granted_models or []
+            )
 
-                if "*" in role.effective_permissions.models:
-                    all_models.add("*")
-                else:
-                    all_models.update(role.effective_permissions.models)
+            if "*" in eff_tools:
+                all_tools.add("*")
+            else:
+                all_tools.update(eff_tools)
+
+            if "*" in eff_models:
+                all_models.add("*")
+            else:
+                all_models.update(eff_models)
 
         # Determine quota tier (highest priority wins)
         sorted_roles = sorted(roles, key=lambda r: r.priority, reverse=True)

@@ -91,6 +91,8 @@ def get_agent(
     endpoint_url: Optional[str] = None,
     api_key: Optional[str] = None,
     extra_headers: Optional[dict] = None,
+    databricks_use_invocations: bool = False,
+    databricks_responses_api: bool = False,
 ) -> MainAgent:
     """
     Get or create agent instance with current configuration for session.
@@ -148,6 +150,8 @@ def get_agent(
         endpoint_url=endpoint_url,
         api_key=api_key,
         extra_headers=extra_headers,
+        databricks_use_invocations=databricks_use_invocations,
+        databricks_responses_api=databricks_responses_api,
     )
 
     # Add to cache with LRU eviction

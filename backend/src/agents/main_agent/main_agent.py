@@ -64,6 +64,8 @@ class MainAgent:
         endpoint_url: Optional[str] = None,
         api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
+        databricks_use_invocations: bool = False,
+        databricks_responses_api: bool = False,
     ):
         """
         Initialize Main Agent with modular architecture and multi-provider support
@@ -83,6 +85,8 @@ class MainAgent:
             endpoint_url: Custom base URL for OpenAI-compatible providers
             api_key: Resolved API key for the endpoint
             extra_headers: Additional HTTP headers (e.g. APIM subscription key)
+            databricks_use_invocations: True for custom Databricks serving endpoints
+            databricks_responses_api: True for Responses API format (input/output)
         """
         # Basic state
         self.session_id = session_id
@@ -101,6 +105,8 @@ class MainAgent:
             endpoint_url=endpoint_url,
             api_key=api_key,
             extra_headers=extra_headers,
+            databricks_use_invocations=databricks_use_invocations,
+            databricks_responses_api=databricks_responses_api,
         )
 
         # Load retry configuration from environment variables

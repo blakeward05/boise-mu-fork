@@ -68,6 +68,8 @@ class MongoManagedModelsService:
             "endpoint_url": model_data.endpoint_url,
             "api_key_env_var": model_data.api_key_env_var,
             "extra_headers": model_data.extra_headers,
+            "databricks_use_invocations": model_data.databricks_use_invocations,
+            "databricks_responses_api": model_data.databricks_responses_api,
             "created_at": now,
             "updated_at": now,
         }
@@ -162,6 +164,10 @@ async def create_managed_model(model_data: ManagedModelCreate) -> ManagedModel:
 
 async def get_managed_model(model_id: str) -> Optional[ManagedModel]:
     return await get_managed_models_service().get_managed_model(model_id)
+
+
+async def get_managed_model_by_internal_id(internal_id: str) -> Optional[ManagedModel]:
+    return await get_managed_models_service().get_managed_model_by_internal_id(internal_id)
 
 
 async def list_managed_models(

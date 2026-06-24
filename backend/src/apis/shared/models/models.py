@@ -75,6 +75,16 @@ class ManagedModelCreate(BaseModel):
         alias="extraHeaders",
         description="Additional HTTP headers (e.g. Ocp-Apim-Subscription-Key for Azure APIM)."
     )
+    databricks_use_invocations: bool = Field(
+        False,
+        alias="databricksUseInvocations",
+        description="Databricks custom serving endpoints use /invocations; foundation models do not."
+    )
+    databricks_responses_api: bool = Field(
+        False,
+        alias="databricksResponsesApi",
+        description="Endpoint uses Responses API format (input/output); false means Chat Completions format (messages/choices)."
+    )
 
 
 class ManagedModelUpdate(BaseModel):
@@ -130,6 +140,8 @@ class ManagedModelUpdate(BaseModel):
     endpoint_url: Optional[str] = Field(None, alias="endpointUrl")
     api_key_env_var: Optional[str] = Field(None, alias="apiKeyEnvVar")
     extra_headers: Optional[Dict[str, str]] = Field(None, alias="extraHeaders")
+    databricks_use_invocations: Optional[bool] = Field(None, alias="databricksUseInvocations")
+    databricks_responses_api: Optional[bool] = Field(None, alias="databricksResponsesApi")
 
 
 class ManagedModel(BaseModel):
@@ -195,6 +207,16 @@ class ManagedModel(BaseModel):
         None,
         alias="extraHeaders",
         description="Additional HTTP headers (e.g. Ocp-Apim-Subscription-Key for Azure APIM)."
+    )
+    databricks_use_invocations: bool = Field(
+        False,
+        alias="databricksUseInvocations",
+        description="Databricks custom serving endpoints use /invocations; foundation models do not."
+    )
+    databricks_responses_api: bool = Field(
+        False,
+        alias="databricksResponsesApi",
+        description="Endpoint uses Responses API format (input/output); false means Chat Completions format (messages/choices)."
     )
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")

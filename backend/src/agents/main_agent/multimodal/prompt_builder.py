@@ -59,44 +59,79 @@ class PromptBuilder:
 
         return content_blocks
 
+    # Extensions that are plain text — decode directly, no parser needed
+    _TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".html", ".htm"}
+
+    # Binary document extensions that require a parser for text extraction
+    _BINARY_DOC_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx"}
+
     def _process_file(self, file: Any) -> Optional[Dict[str, Any]]:
         """
-        Process a single file and create appropriate ContentBlock
+        Process a single file and create appropriate ContentBlock.
 
-        Args:
-            file: FileContent object with content_type, filename, and base64 bytes
-
-        Returns:
-            dict: ContentBlock or None if unsupported
+        Images → Strands image block (converted to image_url for OpenAI providers).
+        Plain-text files → inline text block (universally compatible).
+        Binary docs → inline text block with extracted text when possible, or a
+            placeholder note for formats that require an uninstalled parser.
         """
         content_type = file.content_type.lower()
-        filename = file.filename.lower()
+        filename = file.filename
+        filename_lower = filename.lower()
 
-        # Decode base64 to bytes
         file_bytes = base64.b64decode(file.bytes)
 
-        # Check if image
-        if self.image_handler.is_image(content_type, filename):
+        # --- Images ---
+        if self.image_handler.is_image(content_type, filename_lower):
             return self.image_handler.create_content_block(
                 file_bytes=file_bytes,
                 content_type=content_type,
-                filename=filename
+                filename=filename_lower,
             )
 
-        # Check if document
-        elif self.document_handler.is_document(filename):
-            # Sanitize filename for Bedrock
-            sanitized_name = self.file_sanitizer.sanitize_filename(file.filename)
+        # --- Plain-text documents: decode and inline ---
+        if any(filename_lower.endswith(ext) for ext in self._TEXT_EXTENSIONS):
+            try:
+                text = file_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                text = file_bytes.decode("latin-1", errors="replace")
+            return {"text": f"<file name=\"{filename}\">\n{text}\n</file>"}
 
-            return self.document_handler.create_content_block(
-                file_bytes=file_bytes,
-                filename=filename,
-                sanitized_name=sanitized_name
-            )
+        # --- PDF: try pypdf if available, otherwise note ---
+        if filename_lower.endswith(".pdf"):
+            try:
+                import pypdf  # type: ignore
+                import io
+                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                pages = [page.extract_text() or "" for page in reader.pages]
+                text = "\n\n".join(p for p in pages if p.strip())
+                return {"text": f"<file name=\"{filename}\">\n{text}\n</file>"}
+            except ImportError:
+                logger.warning(
+                    "pypdf not installed — PDF text extraction unavailable. "
+                    "Install with: uv add pypdf"
+                )
+                return {
+                    "text": (
+                        f'[File "{filename}" attached — PDF text extraction requires '
+                        f"the pypdf package. Run `uv add pypdf` in the backend to enable it.]"
+                    )
+                }
+            except Exception as exc:
+                logger.warning("PDF extraction failed for %s: %s", filename, exc)
+                return {"text": f'[File "{filename}" attached — PDF could not be parsed: {exc}]'}
 
-        else:
-            logger.warning(f"Unsupported file type: {filename} ({content_type})")
-            return None
+        # --- Other binary formats (DOCX, XLSX, etc.) ---
+        if self.document_handler.is_document(filename_lower):
+            logger.warning("Binary document type not yet extractable: %s", filename)
+            return {
+                "text": (
+                    f'[File "{filename}" attached — text extraction for this format is not yet supported. '
+                    f"Consider converting to PDF or plain text.]"
+                )
+            }
+
+        logger.warning("Unsupported file type: %s (%s)", filename, content_type)
+        return None
 
     def get_content_type_summary(self, prompt: Union[str, List[Dict[str, Any]]]) -> str:
         """

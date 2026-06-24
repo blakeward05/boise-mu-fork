@@ -60,6 +60,10 @@ class FileUploadRepository(BaseRepository):
         doc = await self._find_one({"_id": upload_id, "user_id": user_id})
         return self._doc_to_meta(doc) if doc else None
 
+    async def get_file_by_upload_id(self, upload_id: str) -> Optional[FileMetadata]:
+        doc = await self._find_one({"_id": upload_id})
+        return self._doc_to_meta(doc) if doc else None
+
     async def update_file_status(
         self, user_id: str, upload_id: str, status: FileStatus
     ) -> Optional[FileMetadata]:

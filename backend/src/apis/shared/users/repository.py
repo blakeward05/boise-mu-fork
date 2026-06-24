@@ -64,8 +64,25 @@ class UserRepository(BaseRepository):
         return profile
 
     async def update_user(self, profile: UserProfile) -> UserProfile:
-        doc = self._profile_to_doc(profile)
-        await self._upsert({"_id": profile.user_id}, doc)
+        status_value = (
+            profile.status.value
+            if isinstance(profile.status, UserStatus)
+            else profile.status
+        )
+        # Use $set so password_hash and other fields not in UserProfile are preserved
+        await self._collection.update_one(
+            {"_id": profile.user_id},
+            {"$set": {
+                "email": profile.email.lower(),
+                "name": profile.name,
+                "roles": profile.roles,
+                "email_domain": profile.email_domain.lower(),
+                "last_login_at": profile.last_login_at,
+                "status": status_value,
+                "picture": profile.picture,
+            }},
+            upsert=False,
+        )
         return profile
 
     async def upsert_user(self, profile: UserProfile) -> Tuple[UserProfile, bool]:

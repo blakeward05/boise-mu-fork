@@ -87,76 +87,36 @@ export class DocumentService {
     file: File,
     onProgress: (progress: number) => void,
   ): Promise<void> {
-    try {
-      // Extract Content-Type from presigned URL if present
-      // The presigned URL includes content-type in the query string
-      const urlObj = new URL(presignedUrl);
-      const contentTypeFromUrl = urlObj.searchParams.get('content-type');
-      // Use Content-Type from URL (what was used to sign) or fall back to file type
-      const contentType = contentTypeFromUrl
-        ? decodeURIComponent(contentTypeFromUrl)
-        : file.type || 'application/octet-stream';
+    const contentType = file.type || 'application/octet-stream';
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
 
-      // Use XMLHttpRequest for progress tracking
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
 
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const progress = Math.round((event.loaded / event.total) * 100);
-            onProgress(progress);
-          }
-        };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new DocumentUploadError(
+            `Upload failed: ${xhr.status} ${xhr.statusText}`,
+            'UPLOAD_FAILED',
+            { status: xhr.status },
+          ));
+        }
+      };
 
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            // Try to parse error response from S3
-            let errorMessage = `S3 upload failed: ${xhr.status} ${xhr.statusText}`;
-            try {
-              const responseText = xhr.responseText;
-              if (responseText) {
-                // S3 errors are usually XML
-                const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(responseText, 'text/xml');
-                const codeElement = xmlDoc.querySelector('Code');
-                const messageElement = xmlDoc.querySelector('Message');
-                if (codeElement?.textContent) {
-                  errorMessage = `${codeElement.textContent}: ${messageElement?.textContent || xhr.statusText}`;
-                }
-              }
-            } catch (parseError) {
-              // If parsing fails, use the response text or default message
-              if (xhr.responseText) {
-                errorMessage = `S3 upload failed: ${xhr.responseText}`;
-              }
-            }
-            reject(
-              new DocumentUploadError(errorMessage, 'S3_UPLOAD_FAILED', {
-                status: xhr.status,
-                statusText: xhr.statusText,
-                responseText: xhr.responseText,
-              }),
-            );
-          }
-        };
+      xhr.onerror = () => {
+        reject(new DocumentUploadError('Network error during upload', 'NETWORK_ERROR'));
+      };
 
-        xhr.onerror = () => {
-          reject(new DocumentUploadError('Network error during S3 upload', 'NETWORK_ERROR'));
-        };
-
-        xhr.open('PUT', presignedUrl);
-        // Use the Content-Type that matches what was used to sign the URL
-        xhr.setRequestHeader('Content-Type', contentType);
-        xhr.send(file);
-      });
-    } catch (err) {
-      if (err instanceof DocumentUploadError) throw err;
-      throw new DocumentUploadError('Failed to upload to S3', 'S3_UPLOAD_FAILED', {
-        originalError: String(err),
-      });
-    }
+      xhr.open('PUT', presignedUrl);
+      xhr.setRequestHeader('Content-Type', contentType);
+      xhr.send(file);
+    });
   }
 
   /**

@@ -19,9 +19,30 @@ from .collections import Collections
 logger = logging.getLogger(__name__)
 
 
+_STALE_INDEXES = [
+    # session_id_unique was created without sparse=True; all docs have session_id=null
+    # so multiple docs collide. Replaced with sparse variant below.
+    (Collections.SESSIONS, "session_id_unique"),
+    # type_date_unique same issue on system_rollups.
+    (Collections.SYSTEM_ROLLUPS, "type_date_unique"),
+    # file_id_unique same issue on user_files.
+    (Collections.USER_FILES, "file_id_unique"),
+]
+
+
+async def _drop_stale_indexes(db) -> None:
+    for collection, index_name in _STALE_INDEXES:
+        try:
+            await db[collection].drop_index(index_name)
+            logger.info("Dropped stale index %s.%s", collection, index_name)
+        except Exception:
+            pass
+
+
 async def ensure_indexes() -> None:
     """Create all collection indexes. Idempotent — safe to call on every boot."""
     db = get_database()
+    await _drop_stale_indexes(db)
     created = 0
 
     specs: dict[str, list[IndexModel]] = {
@@ -32,7 +53,7 @@ async def ensure_indexes() -> None:
         ],
 
         Collections.SESSIONS: [
-            IndexModel([("session_id", ASCENDING)], unique=True, name="session_id_unique"),
+            IndexModel([("session_id", ASCENDING)], unique=True, sparse=True, name="session_id_unique"),
             IndexModel(
                 [("user_id", ASCENDING), ("status", ASCENDING), ("last_message_at", DESCENDING)],
                 name="user_status_time",
@@ -53,7 +74,7 @@ async def ensure_indexes() -> None:
         ],
 
         Collections.SYSTEM_ROLLUPS: [
-            IndexModel([("rollup_type", ASCENDING), ("date", ASCENDING)], unique=True, name="type_date_unique"),
+            IndexModel([("rollup_type", ASCENDING), ("date", ASCENDING)], unique=True, sparse=True, name="type_date_unique"),
         ],
 
         Collections.QUOTA_TIERS: [
@@ -89,7 +110,8 @@ async def ensure_indexes() -> None:
         ],
 
         Collections.APP_ROLES: [
-            IndexModel([("role_name", ASCENDING)], unique=True, name="role_name_unique"),
+            IndexModel([("display_name", ASCENDING)], sparse=True, name="display_name"),
+            IndexModel([("enabled", ASCENDING)], name="app_roles_enabled"),
         ],
 
         Collections.AUTH_PROVIDERS: [
@@ -124,7 +146,7 @@ async def ensure_indexes() -> None:
         ],
 
         Collections.USER_FILES: [
-            IndexModel([("file_id", ASCENDING)], unique=True, name="file_id_unique"),
+            IndexModel([("file_id", ASCENDING)], unique=True, sparse=True, name="file_id_unique"),
             IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_time"),
             IndexModel([("assistant_id", ASCENDING)], sparse=True, name="assistant_id"),
         ],

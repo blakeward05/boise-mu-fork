@@ -49,9 +49,26 @@ All providers are configured in the `managed_models` MongoDB collection via the 
 |----------|------|-------|
 | OpenAI-compatible | Base URL + API key | Covers Ollama, LM Studio, vLLM, LocalAI |
 | AWS Bedrock | IAM / AWS credentials | Optional; keep for cloud parity |
-| Databricks | Workspace URL + token | OpenAI-compatible endpoint |
+| Databricks Foundation Models | Workspace URL + PAT | Standard OpenAI-compatible, no extra flags |
+| Databricks Custom Serving | Workspace URL + PAT | Requires `/invocations` toggle; see below |
 | Azure AI Foundry | Endpoint + API key | OpenAI-compatible with Azure auth |
 | Azure APIM | Endpoint + subscription key | Gateway-managed access |
+
+### Custom `/invocations` Endpoints
+
+Some endpoints (Databricks custom serving, and future providers) use `/invocations` as their path instead of the standard `/v1/chat/completions`. Two admin toggles control this:
+
+| Toggle | Field | When to enable |
+|--------|-------|----------------|
+| **Custom serving endpoint** | `databricksUseInvocations` | Endpoint URL ends in `/invocations` — the transport rewrites the SDK's `/v1/chat/completions` call to `/invocations` automatically |
+| **Responses API format** | `databricksResponsesApi` | Endpoint expects `input` (not `messages`) and returns `output[]` (not `choices[]`) — the OpenAI Responses API format |
+
+The endpoint URL stored in the DB should include `/invocations` (e.g. `https://<workspace>/serving-endpoints/<name>/invocations`). The transport strips it before passing the base URL to the OpenAI SDK, then rewrites the path on the wire.
+
+**Key implementation files:**
+- Transport + SSE conversion: `backend/src/agents/main_agent/core/agent_factory.py` (`_DatabricksTransport`)
+- Model flags: `backend/src/apis/shared/models/models.py` (`databricks_use_invocations`, `databricks_responses_api`)
+- Admin form toggles: `frontend/ai.client/src/app/admin/manage-models/model-form.page.*`
 
 ---
 
@@ -193,12 +210,13 @@ These constraints are enforced from day one so there are no surprises at migrati
 |-------|-------------|--------|
 | **Phase 0** | MongoDB connection layer + Docker Compose + env config | ✅ Complete |
 | **Phase 1** | MongoDB repository implementations (18 collections) | ✅ Complete |
-| **Phase 2** | Auth: OIDC JWT generalization + local auth + MSAL frontend | ✅ Complete |
+| **Phase 2 (backend)** | Auth: OIDC JWT generalization + local username/password auth | ✅ Complete |
+| **Phase 2 (frontend)** | MSAL for Azure Entra + local login form | 🔲 Pending |
 | **Phase 3** | MongoDB session manager (replacing AgentCore Memory) | ✅ Complete |
-| **Phase 4** | LLM provider extensions (OpenAI-compat, Databricks, Azure AI Foundry, APIM) | ✅ Complete |
-| **Phase 5** | File storage abstraction (local filesystem → Azure Blob) | ✅ Complete |
-| **Phase 6** | RAG with Chroma (replace S3 Vectors + Lambda ingestion) | ✅ Complete |
-| **Phase 7** | Admin panel: provider management + user bootstrap | ✅ Complete |
+| **Phase 4** | LLM provider extensions — OpenAI-compat, Databricks (foundation + custom), Azure AI Foundry, APIM | ✅ Complete |
+| **Phase 5** | File storage abstraction (local filesystem → Azure Blob) | 🔲 Pending |
+| **Phase 6** | RAG with Chroma (replace S3 Vectors + Lambda ingestion) | 🔲 Pending |
+| **Phase 7** | Admin panel: provider management + user bootstrap | 🔲 Pending |
 
 ---
 

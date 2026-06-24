@@ -133,6 +133,41 @@
                 Leave blank if no key is required (e.g., local Ollama).
               </p>
             </div>
+
+            <div class="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="databricksUseInvocations"
+                formControlName="databricksUseInvocations"
+                class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+              />
+              <div>
+                <label for="databricksUseInvocations" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Custom serving endpoint (uses <code>/invocations</code>)
+                </label>
+                <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  Enable for custom model serving endpoints that use the <code>/invocations</code> path.
+                </p>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="databricksResponsesApi"
+                formControlName="databricksResponsesApi"
+                class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+              />
+              <div>
+                <label for="databricksResponsesApi" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Responses API format
+                </label>
+                <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  Enable if the endpoint uses the Responses API format (<code>input</code>/<code>output</code>).
+                  Leave unchecked for Chat Completions format (<code>messages</code>/<code>choices</code>).
+                </p>
+              </div>
+            </div>
           }
 
           <!-- Reasoning Model Checkbox -->

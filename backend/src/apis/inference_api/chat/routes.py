@@ -69,13 +69,13 @@ async def _resolve_endpoint_config(
     """
     Look up a managed model's endpoint URL, API key, extra headers, and provider.
 
-    Returns (endpoint_url, api_key, extra_headers, provider) where api_key is
-    already resolved from the env var named in api_key_env_var.  Returns
-    (None, None, None, explicit_provider) when the model is not in the registry
+    Returns (endpoint_url, api_key, extra_headers, provider, databricks_use_invocations) where
+    api_key is already resolved from the env var named in api_key_env_var.  Returns
+    (None, None, None, explicit_provider, False) when the model is not in the registry
     or has no endpoint configured.
     """
     if not model_id:
-        return None, None, None, explicit_provider
+        return None, None, None, explicit_provider, False
     try:
         managed_models = await list_managed_models()
         for m in managed_models:
@@ -85,12 +85,11 @@ async def _resolve_endpoint_config(
                 if m.api_key_env_var:
                     api_key = os.environ.get(m.api_key_env_var) or None
                 extra_headers = m.extra_headers or None
-                # Use the provider stored in the managed model if caller didn't specify
                 resolved_provider = explicit_provider or m.provider or None
-                return endpoint_url, api_key, extra_headers, resolved_provider
+                return endpoint_url, api_key, extra_headers, resolved_provider, m.databricks_use_invocations, m.databricks_responses_api
     except Exception:
         logger.warning("Failed to resolve endpoint config for model %s", model_id)
-    return None, None, None, explicit_provider
+    return None, None, None, explicit_provider, False, False
 
 
 async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
@@ -542,7 +541,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     try:
         # Resolve caching_enabled and endpoint config from managed model registry
-        caching_enabled, (endpoint_url, api_key, extra_headers, resolved_provider) = await asyncio.gather(
+        caching_enabled, (endpoint_url, api_key, extra_headers, resolved_provider, databricks_use_invocations, databricks_responses_api) = await asyncio.gather(
             _resolve_caching_enabled(
                 model_id=input_data.model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
@@ -572,6 +571,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             endpoint_url=endpoint_url,
             api_key=api_key,
             extra_headers=extra_headers,
+            databricks_use_invocations=databricks_use_invocations,
+            databricks_responses_api=databricks_responses_api,
         )
 
         # Build citations list for persistence (convert context chunks to citation format)

@@ -41,6 +41,9 @@ async def lifespan(app: FastAPI):
         await ensure_indexes()
         app.state.close_db = _close_db
         logger.info("MongoDB connected and indexes ensured")
+        from apis.shared.rbac.seed import seed_default_roles
+        await seed_default_roles()
+        logger.info("Default RBAC roles seeded")
 
     # Create output directories
     base_dir = Path(__file__).parent.parent

@@ -87,21 +87,27 @@ class ToolCatalogRepository(BaseRepository):
 
     # ── User preferences ───────────────────────────────────────────
 
-    async def get_user_preferences(self, user_id: str) -> List[UserToolPreference]:
+    async def get_user_preferences(self, user_id: str) -> UserToolPreference:
         doc = await self._prefs.find_one({"_id": f"tool_pref:{user_id}"})
         if not doc:
-            return []
-        return [UserToolPreference(**p) for p in doc.get("preferences", [])]
+            return UserToolPreference(user_id=user_id)
+        return UserToolPreference(
+            user_id=user_id,
+            tool_preferences=doc.get("tool_preferences", {}),
+        )
 
     async def save_user_preferences(
         self, user_id: str, preferences: List[UserToolPreference]
     ) -> None:
+        merged: dict = {}
+        for p in preferences:
+            merged.update(p.tool_preferences)
         await self._prefs.update_one(
             {"_id": f"tool_pref:{user_id}"},
             {
                 "$set": {
                     "user_id": user_id,
-                    "preferences": [p.model_dump(by_alias=False) for p in preferences],
+                    "tool_preferences": merged,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
             },

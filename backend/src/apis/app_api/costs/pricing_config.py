@@ -29,7 +29,7 @@ async def get_model_by_model_id(model_id: str) -> Optional[Dict[str, any]]:
         ManagedModel if found, None otherwise
     """
     # Get all managed models (no role filtering, we want admin view)
-    models = await list_managed_models(user_roles=None)
+    models = await list_managed_models(enabled_only=False)
 
     # Find model with matching model_id
     for model in models:
